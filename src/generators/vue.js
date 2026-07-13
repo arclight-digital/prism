@@ -63,11 +63,13 @@ export function generateVue(meta, config, root) {
   mkdirSync(outDir, { recursive: true });
 
   const wcImport = config.wcPackage || `@${config.prefix}/${config.prefix}-ui`;
+  // Per-component register subpath — registers only this element (guarded define)
+  const registerImport = `${wcImport}/${meta.tag.slice(config.prefix.length + 1)}`;
   const lines = [HEADER];
 
   // <script setup lang="ts">
   lines.push('<script setup lang="ts">');
-  lines.push(`import '${wcImport}';`);
+  lines.push(`import '${registerImport}';`);
   lines.push('');
   lines.push(`defineOptions({ name: '${meta.pascalName}' });`);
   lines.push('');

@@ -48,10 +48,12 @@ export function generatePreact(meta, config, root) {
   mkdirSync(outDir, { recursive: true });
 
   const wcImport = config.wcPackage || `@${config.prefix}/${config.prefix}-ui`;
+  // Per-component register subpath — registers only this element (guarded define)
+  const registerImport = `${wcImport}/${meta.tag.slice(config.prefix.length + 1)}`;
   const lines = [HEADER, ''];
 
   lines.push(`import { type FunctionComponent } from 'preact';`);
-  lines.push(`import '${wcImport}';`);
+  lines.push(`import '${registerImport}';`);
   lines.push('');
 
   // Props interface

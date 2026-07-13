@@ -18,6 +18,21 @@
 export function shadowToLight(css, tag) {
   let result = css;
 
+  // --- :host(<compound>) with multiple parts, e.g. :host(:not([href]):not([interactive])) ---
+  // Must come first: the single-part rules below can't match multi-part compounds,
+  // which would otherwise fall through to the bare :host rule and emit invalid CSS
+  // like `.tag(:not([href]))` that browsers drop entirely.
+  result = result.replace(
+    /:host\(((?::not\(\[[^\]]+\]\)|\[[^\]]+\]|::?[a-z][\w-]*(?:\([^()]*\))?){2,})\)/g,
+    (_m, inner) => {
+      const transformed = inner
+        .replace(/:not\(\[([\w-]+)="([^"]+)"\]\)/g, ':not([data-$1="$2"])')
+        .replace(/:not\(\[([\w-]+)\]\)/g, ':not([data-$1])')
+        .replace(/\[([\w-]+)="([^"]+)"\]/g, '[data-$1="$2"]');
+      return `.${tag}${transformed}`;
+    }
+  );
+
   // --- :host(:not(...)) variants (must come before general :host(...) rules) ---
 
   // :host(:not([prop="value"])) → .tag:not([data-prop="value"])

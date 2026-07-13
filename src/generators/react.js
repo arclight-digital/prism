@@ -61,11 +61,15 @@ export function generateReact(meta, config, root) {
 
   const prefix = config.prefix;
   const wcImport = config.wcPackage || `@${prefix}/${prefix}-ui`;
+  // Per-component register subpath ('arc-button' → '@arclux/arc-ui/button'):
+  // registers the element (guarded) and pulls in only this component's chain,
+  // instead of the root barrel which registers all components.
+  const registerImport = `${wcImport}/${meta.tag.slice(prefix.length + 1)}`;
 
   const lines = [HEADER, ''];
   lines.push(`import React from 'react';`);
   lines.push(`import { createComponent, type EventName } from '@lit/react';`);
-  lines.push(`import { ${meta.className} } from '${wcImport}';`);
+  lines.push(`import { ${meta.className} } from '${registerImport}';`);
   lines.push('');
 
   // Build props interface (exported for consumers)

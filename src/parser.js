@@ -109,6 +109,10 @@ function parseProperties(source) {
     const name = match[1];
     const config = match[2];
 
+    // Internal reactive state ({ state: true }) is not public API — never
+    // expose it in generated wrapper props/types.
+    if (/state\s*:\s*true/.test(config)) continue;
+
     const typeMatch = config.match(/type\s*:\s*(\w+)/);
     const reflectMatch = config.match(/reflect\s*:\s*(true|false)/);
 

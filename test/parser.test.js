@@ -38,6 +38,21 @@ describe('parseComponent', () => {
     expect(count.reflect).toBe(false);
   });
 
+  it('excludes { state: true } internal properties from the public prop surface', () => {
+    const source = `
+      /** @tag arc-card */
+      export class ArcCard extends LitElement {
+        static properties = {
+          href:       { type: String },
+          _hasFooter: { state: true },
+          _svgContent: { state: true, type: String },
+        };
+      }
+    `;
+    const meta = parseComponent(source, '/project/src/content/card.js', prefix);
+    expect(meta.props.map((p) => p.name)).toEqual(['href']);
+  });
+
   it('applies constructor defaults', () => {
     const meta = parseComponent(fixture, filePath, prefix);
     const variant = meta.props.find((p) => p.name === 'variant');

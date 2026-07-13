@@ -37,6 +37,24 @@ describe('shadowToLight', () => {
     expect(result).toContain('.arc-button:not([data-variant="primary"])');
   });
 
+  it(':host with compound :not() chain → valid selector (no dropped rule)', () => {
+    const result = shadowToLight(
+      ':host(:not([href]):not([interactive])) .card:hover { transform: none; }',
+      'arc-card',
+    );
+    expect(result).toContain('.arc-card:not([data-href]):not([data-interactive]) .card:hover');
+    // Regression: previously emitted invalid `.arc-card(:not(...))`
+    expect(result).not.toContain('.arc-card(');
+  });
+
+  it(':host with mixed attr + pseudo compound', () => {
+    const result = shadowToLight(
+      ':host([variant="pills"]:hover) { color: red; }',
+      tag,
+    );
+    expect(result).toContain('.arc-button[data-variant="pills"]:hover');
+  });
+
   it('scopes inner selectors: .btn → .tag .btn', () => {
     const result = shadowToLight('.btn { border: none; }', tag);
     expect(result).toContain('.arc-button .btn');
