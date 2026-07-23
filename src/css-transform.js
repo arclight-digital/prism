@@ -16,6 +16,25 @@
 export function shadowToLight(css, tag) {
   let result = css;
 
+  // --- ::slotted(<compound>) → light-DOM equivalent ---
+  // ::slotted styles content projected into a slot. Once the shadow boundary is
+  // gone that pseudo-element matches nothing, so passing it through verbatim
+  // silently drops the styles. Projected nodes are light-DOM children of the
+  // host (named slots carry a matching `slot="X"` attribute), so rewrite to the
+  // flattened selector and let the scoping pass below re-home it under `.tag`.
+  // Runs first so a preceding `:host(...)` compound is still handled below.
+  //
+  //   slot[name="x"]::slotted(SEL) → SEL[slot="x"]   (or [slot="x"] for `*`)
+  //   slot::slotted(SEL)           → SEL
+  //   ::slotted(SEL)               → SEL
+  result = result.replace(
+    /slot\[name=(['"])([^'"]+)\1\]::slotted\(\s*([^)]+?)\s*\)/g,
+    (_m, _q, slotName, sel) =>
+      sel.trim() === '*' ? `[slot="${slotName}"]` : `${sel.trim()}[slot="${slotName}"]`
+  );
+  result = result.replace(/slot::slotted\(\s*([^)]+?)\s*\)/g, '$1');
+  result = result.replace(/::slotted\(\s*([^)]+?)\s*\)/g, '$1');
+
   // --- :host(<compound>) with multiple parts, e.g. :host(:not([href]):not([interactive])) ---
   // Must come first: the single-part rules below can't match multi-part compounds,
   // which would otherwise fall through to the bare :host rule and emit invalid CSS

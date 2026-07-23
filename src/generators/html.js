@@ -9,6 +9,7 @@
 
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { isPrismGenerated } from './header.js';
 import { loadTokenMap, resolveTokens } from '../resolve-tokens.js';
 import { shadowToLight } from '../css-transform.js';
 
@@ -383,7 +384,7 @@ function generateHTMLExternal(meta, config, root) {
 
   if (existsSync(outPath)) {
     const existing = readFileSync(outPath, 'utf-8');
-    if (!existing.startsWith(HEADER)) {
+    if (!isPrismGenerated(existing)) {
       return { path: outPath, written: false };
     }
   }
@@ -531,7 +532,7 @@ function generateHTMLInline(meta, config, root) {
 
   if (existsSync(outPath)) {
     const existing = readFileSync(outPath, 'utf-8');
-    if (!existing.startsWith(HEADER)) {
+    if (!isPrismGenerated(existing)) {
       return { path: outPath, written: false };
     }
   }

@@ -109,4 +109,47 @@ describe('shadowToLight', () => {
     const result = shadowToLight('.arc-button-icon { width: 1em; }', tag);
     expect(result).toContain('.arc-button .arc-button-icon');
   });
+
+  it('maps ::slotted(SEL) to a scoped descendant instead of dropping it', () => {
+    // Regression: ::slotted() is inert in light DOM, so passing it through
+    // verbatim silently lost the slotted content styles.
+    const result = shadowToLight('::slotted(h1) { font-size: 2rem; }', 'arc-page-header');
+    expect(result).toContain('.arc-page-header h1');
+    expect(result).not.toContain('::slotted');
+  });
+
+  it('maps :host(...) ::slotted(SEL) with the host qualifier preserved', () => {
+    const result = shadowToLight(
+      ':host([variant="hero"]) ::slotted(h1) { font-size: 3rem; }',
+      'arc-page-header',
+    );
+    expect(result).toContain('.arc-page-header[data-variant="hero"] h1');
+    expect(result).not.toContain('::slotted');
+  });
+
+  it('preserves pseudo-classes trailing a ::slotted() selector', () => {
+    const result = shadowToLight('::slotted(p):first-child { margin-top: 0; }', 'arc-page-header');
+    expect(result).toContain('.arc-page-header p:first-child');
+  });
+
+  it('maps slot[name="x"]::slotted(*) to a scoped [slot="x"] attribute selector', () => {
+    // Real page-header pattern: named-slot projected content carries slot="x"
+    // in light DOM, so the selector must target that, not the (gone) slot element.
+    const result = shadowToLight(
+      `.page-header__heading,\nslot[name="heading"]::slotted(*) { font-weight: 700; }`,
+      'arc-page-header',
+    );
+    expect(result).toContain('.arc-page-header .page-header__heading');
+    expect(result).toContain('.arc-page-header [slot="heading"]');
+    expect(result).not.toContain('::slotted');
+    expect(result).not.toContain('slot[name');
+  });
+
+  it('maps slot[name="x"]::slotted(SEL) keeping the element selector', () => {
+    const result = shadowToLight(
+      `slot[name="heading"]::slotted(h1) { font-size: 2rem; }`,
+      'arc-page-header',
+    );
+    expect(result).toContain('.arc-page-header h1[slot="heading"]');
+  });
 });
