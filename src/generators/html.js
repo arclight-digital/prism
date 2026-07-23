@@ -97,6 +97,15 @@ function placeholderForExpr(expr) {
   if (!propMatch) return '';
 
   const prop = propMatch[1];
+
+  // Drop interpolations that can't be resolved to static content rather than
+  // emitting a mangled identifier as visible text/markup:
+  //   - method / getter calls: ${this._renderOverflow()}, ${this.fmt(x)}
+  //   - private / computed members: ${this._hasToc ? 'has-toc' : ''}
+  // These are exactly the patterns that make a component interactive, so a
+  // clean example simply omits the dynamic bit instead of showing "_render
+  // Overflow" / "_has Toc".
+  if (expr.includes('(') || prop.startsWith('_')) return '';
   // Map common property names to sensible placeholder text
   const placeholders = {
     heading: 'Heading',

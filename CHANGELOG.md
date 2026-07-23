@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.3 — 2026-07-23
+
+### Fixed
+
+- **HTML template converter drops unresolvable interpolations instead of emitting garbage.** Method/getter calls (`${this._renderOverflow()}`) and private/computed members (`${this._hasToc ? 'has-toc' : ''}`) were turned into visible text/markup via a mangled identifier (`_render Overflow`, a `_has Toc` class). They're now dropped, leaving clean surrounding markup; plain public property placeholders (`${this.heading}` → "Heading") are unchanged. This makes the `hybrid` interactivity tag viable for components that use render helpers or computed classes.
+
 ## 2.0.2 — 2026-07-23
 
 ### Fixed

@@ -216,4 +216,47 @@ describe('generateHTML — complex templates', () => {
     expect(content).not.toContain('${');
     expect(content).toContain('aria-label');
   });
+
+  describe('unresolvable interpolations', () => {
+    it('drops method/getter calls instead of emitting a mangled identifier', () => {
+      const meta = {
+        ...baseMeta,
+        template: '<span class="icon">${this._getDefaultIcon()}</span>',
+      };
+      const content = readFileSync(
+        generateHTML(meta, htmlConfig, tmpDir).results[0].path,
+        'utf-8',
+      );
+      expect(content).not.toContain('_get Default Icon');
+      expect(content).not.toContain('${');
+      expect(content).toContain('<span class="icon"></span>');
+    });
+
+    it('drops private/computed members used in class expressions', () => {
+      const meta = {
+        ...baseMeta,
+        template: `<div class="\${this._hasToc ? 'has-toc' : ''}">x</div>`,
+      };
+      const content = readFileSync(
+        generateHTML(meta, htmlConfig, tmpDir).results[0].path,
+        'utf-8',
+      );
+      expect(content).not.toContain('_has Toc');
+      expect(content).not.toContain('class="_has');
+    });
+
+    it('still renders a plain public property placeholder', () => {
+      const meta = {
+        ...baseMeta,
+        template: '<h1>${this.heading}</h1><span>${this._renderOverflow()}</span>',
+      };
+      const content = readFileSync(
+        generateHTML(meta, htmlConfig, tmpDir).results[0].path,
+        'utf-8',
+      );
+      expect(content).toContain('<h1>Heading</h1>');
+      expect(content).not.toContain('_render Overflow');
+      expect(content).toContain('<span></span>');
+    });
+  });
 });
