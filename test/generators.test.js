@@ -144,6 +144,98 @@ describe('generateCSS', () => {
   });
 });
 
+describe('event wiring (regressions)', () => {
+  it('Vue captures emit and wires the template listener', () => {
+    const content = readFileSync(
+      generateVue(meta, config('out/vue'), tmpDir).path,
+      'utf-8',
+    );
+    expect(content).toContain('const emit = defineEmits<{');
+    expect(content).toContain(
+      `@arc-click="(payload: CustomEvent) => emit('arc-click', payload)"`,
+    );
+  });
+
+  it('React omits the EventName type import when a component has no events', () => {
+    // No custom events, non-button tag, and no <button> in the template → no
+    // event map at all (buildEventMap adds onClick for arc-button/<button>).
+    const staticMeta = {
+      ...meta,
+      tag: 'arc-badge',
+      className: 'ArcBadge',
+      pascalName: 'Badge',
+      events: [],
+      template: '<span class="badge"><slot></slot></span>',
+    };
+    const content = readFileSync(
+      generateReact(staticMeta, config('out/react'), tmpDir).path,
+      'utf-8',
+    );
+    expect(content).toContain(`import { createComponent } from '@lit/react';`);
+    expect(content).not.toContain('EventName');
+  });
+
+  it('React still imports EventName when events exist', () => {
+    const content = readFileSync(
+      generateReact(meta, config('out/react'), tmpDir).path,
+      'utf-8',
+    );
+    expect(content).toContain('type EventName');
+  });
+
+  it('Angular binds Array/Object props as properties, not attributes', () => {
+    const arrMeta = {
+      ...meta,
+      props: [
+        { name: 'items', type: 'Array', default: '', reflect: false, values: [] },
+        { name: 'config', type: 'Object', default: '', reflect: false, values: [] },
+        { name: 'label', type: 'String', default: '', reflect: false, values: [] },
+      ],
+    };
+    const content = readFileSync(
+      generateAngular(arrMeta, config('out/angular'), tmpDir).path,
+      'utf-8',
+    );
+    expect(content).toContain('[items]="items"');
+    expect(content).toContain('[config]="config"');
+    expect(content).not.toContain('[attr.items]');
+    expect(content).not.toContain('[attr.config]');
+    // String props still bind as attributes
+    expect(content).toContain('[attr.label]="label"');
+  });
+
+  it('Solid exposes a typed handler prop and binds via on: namespace', () => {
+    const content = readFileSync(
+      generateSolid(meta, config('out/solid'), tmpDir).path,
+      'utf-8',
+    );
+    expect(content).toContain('onArcClick?: (e: CustomEvent) => void;');
+    expect(content).toContain('on:arc-click={local.onArcClick}');
+    expect(content).toContain(`'onArcClick'`); // included in splitProps keys
+  });
+
+  it('Preact wires custom events through a ref + effect', () => {
+    const content = readFileSync(
+      generatePreact(meta, config('out/preact'), tmpDir).path,
+      'utf-8',
+    );
+    expect(content).toContain('onArcClick?: (e: CustomEvent) => void;');
+    expect(content).toContain("from 'preact/hooks'");
+    expect(content).toContain(`el.addEventListener('arc-click'`);
+    expect(content).toContain('removeEventListener');
+  });
+
+  it('Preact keeps the simple functional form when there are no events', () => {
+    const staticMeta = { ...meta, events: [] };
+    const content = readFileSync(
+      generatePreact(staticMeta, config('out/preact'), tmpDir).path,
+      'utf-8',
+    );
+    expect(content).not.toContain('preact/hooks');
+    expect(content).not.toContain('addEventListener');
+  });
+});
+
 describe('manual-file safety', () => {
   it('React — does not overwrite manual file', () => {
     const outDir = join(tmpDir, 'out/react/reactive');

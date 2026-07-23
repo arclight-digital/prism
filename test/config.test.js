@@ -6,12 +6,12 @@ import { normalizeConfig, isIgnored, discoverComponents } from '../src/config.js
 
 describe('normalizeConfig', () => {
   it('defaults ignore to empty array', () => {
-    const config = normalizeConfig({ tiers: ['content'] });
+    const config = normalizeConfig({ components: 'src', tiers: ['content'] });
     expect(config.ignore).toEqual([]);
   });
 
   it('defaults tiers to empty array', () => {
-    const config = normalizeConfig({ ignore: [] });
+    const config = normalizeConfig({ components: 'src', ignore: [] });
     expect(config.tiers).toEqual([]);
   });
 
@@ -23,6 +23,20 @@ describe('normalizeConfig', () => {
     });
     expect(config.ignore).toEqual(['**/index.js']);
     expect(config.tiers).toEqual(['reactive']);
+  });
+
+  it('throws an actionable error when components is missing', () => {
+    expect(() => normalizeConfig({ tiers: ['content'] })).toThrow(/config\.components is required/);
+  });
+
+  it('throws when config is not an object', () => {
+    expect(() => normalizeConfig(undefined)).toThrow(/config is missing/);
+  });
+
+  it('throws when tiers is not an array', () => {
+    expect(() => normalizeConfig({ components: 'src', tiers: 'content' })).toThrow(
+      /config\.tiers must be an array/
+    );
   });
 });
 

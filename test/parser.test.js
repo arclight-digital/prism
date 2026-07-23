@@ -145,4 +145,127 @@ describe('parseComponent', () => {
     const result = parseComponent('export const foo = 42;', '/src/utils.js');
     expect(result).toBeNull();
   });
+
+  describe('property declaration styles', () => {
+    it('reads defaults set after a nested block in the constructor', () => {
+      // Regression: a lazy regex stopped at the first nested `}` and dropped
+      // any default assigned afterward.
+      const source = `
+        /** @tag arc-toggle */
+        export class ArcToggle extends LitElement {
+          static properties = {
+            variant: { type: String },
+            size: { type: String },
+          };
+          constructor() {
+            super();
+            if (this.foo) {
+              this.bar = 1;
+            }
+            this.variant = 'primary';
+            this.size = 'medium';
+          }
+        }
+      `;
+      const meta = parseComponent(source, '/src/reactive/toggle.js', prefix);
+      expect(meta.props.find((p) => p.name === 'variant').default).toBe("'primary'");
+      expect(meta.props.find((p) => p.name === 'size').default).toBe("'medium'");
+    });
+
+    it('parses @property() decorator declarations', () => {
+      const source = `
+        /** @tag arc-chip */
+        export class ArcChip extends LitElement {
+          @property({ type: String, reflect: true }) variant;
+          @property({ type: Boolean }) disabled;
+          @state() _internal;
+        }
+      `;
+      const meta = parseComponent(source, '/src/reactive/chip.js', prefix);
+      const names = meta.props.map((p) => p.name);
+      expect(names).toContain('variant');
+      expect(names).toContain('disabled');
+      expect(names).not.toContain('_internal');
+      expect(meta.props.find((p) => p.name === 'variant').reflect).toBe(true);
+      expect(meta.props.find((p) => p.name === 'disabled').type).toBe('Boolean');
+    });
+
+    it('parses static get properties() getter style', () => {
+      const source = `
+        /** @tag arc-tag */
+        export class ArcTag extends LitElement {
+          static get properties() {
+            return {
+              label: { type: String },
+              count: { type: Number },
+            };
+          }
+        }
+      `;
+      const meta = parseComponent(source, '/src/content/tag.js', prefix);
+      const names = meta.props.map((p) => p.name);
+      expect(names).toContain('label');
+      expect(names).toContain('count');
+      expect(meta.props.find((p) => p.name === 'count').type).toBe('Number');
+    });
+  });
+
+  describe('input validation (injection hardening)', () => {
+    it('rejects a component whose customElements.define tag is not a valid custom-element name', () => {
+      const malicious = `
+        export class ArcEvil extends LitElement {
+          static properties = { label: { type: String } };
+          render() { return html\`<span></span>\`; }
+        }
+        customElements.define('div onload={fetch(\`//evil\`)}><script', ArcEvil);
+      `;
+      expect(parseComponent(malicious, '/src/content/evil.js', prefix)).toBeNull();
+    });
+
+    it('rejects a tag containing path-traversal sequences', () => {
+      const traversal = `
+        export class ArcEvil extends LitElement {
+          render() { return html\`<span></span>\`; }
+        }
+        customElements.define('../../../../etc/passwd', ArcEvil);
+      `;
+      expect(parseComponent(traversal, '/src/content/evil.js', prefix)).toBeNull();
+    });
+
+    it('rejects a single-word tag with no hyphen', () => {
+      const noHyphen = `
+        export class ArcEvil extends LitElement {
+          render() { return html\`<span></span>\`; }
+        }
+        customElements.define('button', ArcEvil);
+      `;
+      expect(parseComponent(noHyphen, '/src/content/evil.js', prefix)).toBeNull();
+    });
+
+    it('drops events whose names are not valid identifiers but keeps valid ones', () => {
+      const source = `
+        /** @tag arc-widget */
+        export class ArcWidget extends LitElement {
+          static properties = { label: { type: String } };
+          _emit() {
+            this.dispatchEvent(new CustomEvent('arc-change'));
+            this.dispatchEvent(new CustomEvent('x: (globalThis.pwned = 1) as any, y'));
+          }
+        }
+      `;
+      const meta = parseComponent(source, '/src/reactive/widget.js', prefix);
+      expect(meta.events).toEqual(['arc-change']);
+    });
+
+    it('still accepts a normal multi-part tag name', () => {
+      const source = `
+        export class ArcIconButton extends LitElement {
+          render() { return html\`<span></span>\`; }
+        }
+        customElements.define('arc-icon-button', ArcIconButton);
+      `;
+      const meta = parseComponent(source, '/src/reactive/icon-button.js', prefix);
+      expect(meta.tag).toBe('arc-icon-button');
+    });
+  });
 });

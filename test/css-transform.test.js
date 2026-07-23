@@ -66,4 +66,47 @@ describe('shadowToLight', () => {
     // Should not double-scope
     expect(result).not.toContain('.arc-button .arc-button');
   });
+
+  it('scopes EVERY selector in a comma-separated list', () => {
+    // Regression: only the first selector used to be scoped, leaking `.label`.
+    const result = shadowToLight('.icon, .label { display: flex; }', tag);
+    expect(result).toContain('.arc-button .icon');
+    expect(result).toContain('.arc-button .label');
+  });
+
+  it('scopes bare element selectors, not just classes', () => {
+    // Regression: `svg`/`a:hover` used to leak site-wide because scoping only
+    // matched selectors beginning with `.`.
+    const result = shadowToLight('svg { fill: currentColor; }', tag);
+    expect(result).toContain('.arc-button svg');
+  });
+
+  it('scopes multiple rules on a single line', () => {
+    const result = shadowToLight('.a { color: red; } .b { color: blue; }', tag);
+    expect(result).toContain('.arc-button .a');
+    expect(result).toContain('.arc-button .b');
+  });
+
+  it('does not scope @keyframes step selectors', () => {
+    const input = '@keyframes spin { 0% { opacity: 0; } 100% { opacity: 1; } }';
+    const result = shadowToLight(input, tag);
+    expect(result).toContain('0% {');
+    expect(result).toContain('100% {');
+    expect(result).not.toContain('.arc-button 0%');
+    expect(result).not.toContain('.arc-button 100%');
+  });
+
+  it('scopes rules nested inside @media', () => {
+    const input = '@media (min-width: 600px) { .btn { padding: 1rem; } }';
+    const result = shadowToLight(input, tag);
+    expect(result).toContain('@media (min-width: 600px)');
+    expect(result).toContain('.arc-button .btn');
+  });
+
+  it('treats a same-prefixed class as a distinct, still-scopable selector', () => {
+    // `.arc-button-icon` shares the tag as a string prefix but is a different
+    // class token, so it must still be scoped.
+    const result = shadowToLight('.arc-button-icon { width: 1em; }', tag);
+    expect(result).toContain('.arc-button .arc-button-icon');
+  });
 });

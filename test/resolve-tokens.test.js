@@ -53,4 +53,25 @@ describe('resolveTokens', () => {
     );
     expect(result).toBe('padding: 16px 8px;');
   });
+
+  it('resolves the SAME token used more than once across the string', () => {
+    // Regression: a shared `seen` set previously blocked every occurrence after
+    // the first, leaving later uses as literal var(--token).
+    const map = new Map([['--color-primary', 'red']]);
+    const result = resolveTokens(
+      '.a { color: var(--color-primary); } .b { border-color: var(--color-primary); }',
+      map,
+    );
+    expect(result).toBe('.a { color: red; } .b { border-color: red; }');
+    expect(result).not.toContain('var(--color-primary)');
+  });
+
+  it('resolves a token reused after being referenced through another token', () => {
+    const map = new Map([
+      ['--base', '4px'],
+      ['--gap', 'var(--base)'],
+    ]);
+    const result = resolveTokens('margin: var(--gap) var(--base);', map);
+    expect(result).toBe('margin: 4px 4px;');
+  });
 });

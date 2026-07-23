@@ -62,7 +62,7 @@ Enum values are auto-detected from `:host([variant="value"])` patterns in the CS
 npm i -D @arclux/prism
 ```
 
-Requires **Node.js 18+**. No peer dependencies — the only runtime dependency is [chokidar](https://github.com/paulmillr/chokidar) for watch mode.
+Requires **Node.js 24+**. No peer dependencies — the only runtime dependency is [chokidar](https://github.com/paulmillr/chokidar) for watch mode.
 
 ## Usage
 
