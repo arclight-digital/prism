@@ -56,6 +56,8 @@ Prism generates:
 
 Enum values are auto-detected from `:host([variant="value"])` patterns in the CSS. Props, defaults, types, events, and interactivity level are all extracted automatically.
 
+Custom events (`dispatchEvent(new CustomEvent('arc-change'))`) become typed handler props in every wrapper — `onArcChange` in React/Solid/Preact, a wired `defineEmits` listener in Vue, and an `@Output()` in Angular — so a consumer's handler actually fires. (Preact binds via a ref effect, since its `on*` convention can't target hyphenated event names.)
+
 ## Installation
 
 ```bash
@@ -183,9 +185,9 @@ Each framework section (`react`, `vue`, `svelte`, `angular`, `solid`, `preact`) 
 
 Prism uses regex-based parsing (no AST library) to extract metadata from Lit source files:
 
-1. **Tag + class name** from `customElements.define('arc-button', ArcButton)`
-2. **Properties** from `static properties = { ... }` — extracts name, type, and reflect
-3. **Defaults** from `constructor() { this.variant = 'primary'; }`
+1. **Tag + class name** from `customElements.define('arc-button', ArcButton)`, or a `@tag arc-button` JSDoc annotation. The tag must be a valid custom-element name (lowercase, hyphenated) — components with an invalid tag are skipped.
+2. **Properties** from `static properties = { ... }`, `static get properties() { ... }`, or `@property()` decorators — extracts name, type, and reflect. Internal `{ state: true }` / `@state()` members are excluded from the public surface.
+3. **Defaults** from `constructor() { this.variant = 'primary'; }` — assignments after nested blocks (`if`/`for`/`try`) are handled.
 4. **CSS** from `` css`...` `` template literals
 5. **Enum values** from `:host([prop="value"])` patterns in the CSS
 6. **Template** from `render() { return html`...`; }` — supports variable inlining when templates are built from multiple `html`` ` blocks
@@ -243,9 +245,13 @@ The `css` and `html` outputs convert shadow DOM CSS to light DOM equivalents:
 | `:host(:hover)` | `.arc-button:hover` |
 | `:host(::before)` | `.arc-button::before` |
 | `:host(:not([variant="primary"]))` | `.arc-button:not([data-variant="primary"])` |
-| `.btn` (inner selector) | `.arc-button .btn` |
+| `.btn` (inner class) | `.arc-button .btn` |
+| `svg` (bare element) | `.arc-button svg` |
+| `.icon, .label` (selector list) | `.arc-button .icon, .arc-button .label` |
 
-The inline HTML variant further resolves all `var(--token)` references using your design tokens CSS, and inlines the computed styles directly onto elements. Pseudo-state rules (`:hover`, `:focus`, etc.) that can't be inlined are placed in a `<style>` block.
+Every selector in a rule is scoped — including bare element, id, and attribute selectors, and each item in a comma-separated list — so inner styles never leak past the component. `@keyframes` step selectors (`0%`, `from`/`to`) and at-rule preludes (`@media`, `@supports`) are left untouched.
+
+The inline HTML variant further resolves all `var(--token)` references using your design tokens CSS, and inlines the computed styles directly onto elements. A token reused multiple times in the same rule resolves at every occurrence. Pseudo-state rules (`:hover`, `:focus`, etc.) that can't be inlined are placed in a `<style>` block.
 
 ## Safety guarantees
 
