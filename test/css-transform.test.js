@@ -152,4 +152,40 @@ describe('shadowToLight', () => {
     );
     expect(result).toContain('.arc-page-header h1[slot="heading"]');
   });
+
+  it('does not glue a standalone comment onto the next selector', () => {
+    // Regression: a comment before a :host([attr]) variant rule was prefixed
+    // with `.tag ` and fused into the (already-scoped) selector, producing the
+    // dead `.tag .tag[data-…]`.
+    const result = shadowToLight(
+      '.card { color: red; }\n/* Variants */\n:host([variant="primary"]) { background: blue; }',
+      tag,
+    );
+    expect(result).toContain('/* Variants */');
+    expect(result).toContain('.arc-button[data-variant="primary"]');
+    expect(result).not.toContain('.arc-button .arc-button');
+  });
+
+  it('handles a comment containing braces without miscounting rules', () => {
+    const result = shadowToLight('/* a { b } c */\n.btn { color: red; }', tag);
+    expect(result).toContain('.arc-button .btn');
+  });
+
+  it('transforms :host() attributes written with single quotes', () => {
+    const result = shadowToLight(":host([layout='centered']) { display: grid; }", 'arc-page-layout');
+    expect(result).toContain('.arc-page-layout[data-layout="centered"]');
+    expect(result).not.toContain("([layout='centered'])");
+  });
+
+  it('scopes every selector in a comma list (all combinators)', () => {
+    const result = shadowToLight('.a:hover .x, .b:focus .x { color: red; }', tag);
+    expect(result).toContain('.arc-button .a:hover .x');
+    expect(result).toContain('.arc-button .b:focus .x');
+  });
+
+  it('transforms :host(.class) into a compound .tag.class selector', () => {
+    const result = shadowToLight(':host(.dismissed) { display: none; }', 'arc-callout');
+    expect(result).toContain('.arc-callout.dismissed');
+    expect(result).not.toContain('.arc-callout(');
+  });
 });

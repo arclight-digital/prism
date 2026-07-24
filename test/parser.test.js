@@ -87,6 +87,23 @@ describe('parseComponent', () => {
     expect(size.values).toContain('large');
   });
 
+  it('detects enum values from single-quoted :host([prop=\'value\']) patterns', () => {
+    const source = `
+      /** @tag arc-layout */
+      export class ArcLayout extends LitElement {
+        static properties = { layout: { type: String } };
+        static styles = css\`
+          :host([layout='centered']) { display: grid; }
+          :host([layout='split']) { display: flex; }
+        \`;
+      }
+    `;
+    const meta = parseComponent(source, '/src/layout/layout.js', prefix);
+    const layout = meta.props.find((p) => p.name === 'layout');
+    expect(layout.values).toContain('centered');
+    expect(layout.values).toContain('split');
+  });
+
   it('extracts template from render()', () => {
     const meta = parseComponent(fixture, filePath, prefix);
     expect(meta.template).toContain('<button');

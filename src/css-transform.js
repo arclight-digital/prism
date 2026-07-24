@@ -43,9 +43,9 @@ export function shadowToLight(css, tag) {
     /:host\(((?::not\(\[[^\]]+\]\)|\[[^\]]+\]|::?[a-z][\w-]*(?:\([^()]*\))?){2,})\)/g,
     (_m, inner) => {
       const transformed = inner
-        .replace(/:not\(\[([\w-]+)="([^"]+)"\]\)/g, ':not([data-$1="$2"])')
+        .replace(/:not\(\[([\w-]+)=["']([^"']+)["']\]\)/g, ':not([data-$1="$2"])')
         .replace(/:not\(\[([\w-]+)\]\)/g, ':not([data-$1])')
-        .replace(/\[([\w-]+)="([^"]+)"\]/g, '[data-$1="$2"]');
+        .replace(/\[([\w-]+)=["']([^"']+)["']\]/g, '[data-$1="$2"]');
       return `.${tag}${transformed}`;
     }
   );
@@ -54,7 +54,7 @@ export function shadowToLight(css, tag) {
 
   // :host(:not([prop="value"])) → .tag:not([data-prop="value"])
   result = result.replace(
-    /:host\(:not\(\[([\w-]+)="([^"]+)"\]\)\)/g,
+    /:host\(:not\(\[([\w-]+)=["']([^"']+)["']\]\)\)/g,
     `.${tag}:not([data-$1="$2"])`
   );
 
@@ -68,7 +68,7 @@ export function shadowToLight(css, tag) {
 
   // :host([attr="value"]::pseudo-element) → .tag[data-attr="value"]::pseudo-element
   result = result.replace(
-    /:host\(\[([\w-]+)="([^"]+)"\](::?[a-z][\w-]*)\)/g,
+    /:host\(\[([\w-]+)=["']([^"']+)["']\](::?[a-z][\w-]*)\)/g,
     `.${tag}[data-$1="$2"]$3`
   );
 
@@ -82,7 +82,7 @@ export function shadowToLight(css, tag) {
 
   // :host([prop="value"]) → .tag[data-prop="value"]
   result = result.replace(
-    /:host\(\[([\w-]+)="([^"]+)"\]\)/g,
+    /:host\(\[([\w-]+)=["']([^"']+)["']\]\)/g,
     `.${tag}[data-$1="$2"]`
   );
 
@@ -98,6 +98,15 @@ export function shadowToLight(css, tag) {
   // :host(:pseudo-class) → .tag:pseudo-class
   result = result.replace(
     /:host\((::?[a-z][\w-]*)\)/g,
+    `.${tag}$1`
+  );
+
+  // --- :host(.class) ---
+
+  // :host(.state) → .tag.state (compound, no descendant space). Without this a
+  // host class selector falls through to the bare rule and emits `.tag(.state)`.
+  result = result.replace(
+    /:host\((\.[\w.-]+)\)/g,
     `.${tag}$1`
   );
 
@@ -141,6 +150,15 @@ function scopeSelectors(css, tag) {
 
   for (let i = 0; i < css.length; i++) {
     const ch = css[i];
+    if (ch === '/' && css[i + 1] === '*') {
+      // Copy comments through verbatim without letting any braces inside them be
+      // counted as rule boundaries.
+      const end = css.indexOf('*/', i + 2);
+      const stop = end === -1 ? css.length : end + 2;
+      buf += css.slice(i, stop);
+      i = stop - 1;
+      continue;
+    }
     if (ch === '{') {
       const prelude = buf;
       const trimmed = prelude.trim();
@@ -170,9 +188,16 @@ function scopeSelectors(css, tag) {
 function scopeSelectorList(prelude, tag, scopedRe) {
   return splitTopLevel(prelude, ',')
     .map((part) => {
-      const lead = part.match(/^\s*/)[0];
-      const trail = part.match(/\s*$/)[0];
-      const sel = part.trim();
+      // Separate leading whitespace AND standalone comments from the actual
+      // selector. Without this, a comment sitting between rules glues onto the
+      // next selector and gets `.tag ` prefixed — and when that selector is
+      // itself already `.tag`-anchored (every :host([attr]) variant), the result
+      // is `.tag .tag[data-…]`, which requires a nested component and matches
+      // nothing (dead CSS).
+      const lead = part.match(/^(?:\s|\/\*[\s\S]*?\*\/)*/)[0];
+      let sel = part.slice(lead.length);
+      const trail = sel.match(/\s*$/)[0];
+      sel = sel.slice(0, sel.length - trail.length);
       if (!sel || scopedRe.test(sel)) return part;
       return `${lead}.${tag} ${sel}${trail}`;
     })

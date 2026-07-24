@@ -88,25 +88,67 @@ function parseDeclarations(declarationStr) {
 
 /* ── Template conversion ─────────────────────────────────────── */
 
+/** Default placeholder values for common bound attributes. */
+const ATTR_VALUE_DEFAULTS = {
+  href: '#',
+  src: '#',
+  type: 'button',
+  role: 'presentation',
+  'aria-expanded': 'false',
+  'aria-hidden': 'true',
+  'aria-busy': 'false',
+};
+
+/** Whether a prop's known default value is truthy (unknown defaults → falsy). */
+function isDefaultTruthy(defaults, prop) {
+  const d = defaults[prop];
+  if (d === undefined) return false;
+  const t = String(d).trim();
+  return !['', 'false', '0', 'null', 'undefined', "''", '""'].includes(t);
+}
+
+/** True if an expression can't be resolved statically (call or private member). */
+function isUnresolvable(expr) {
+  const t = expr.trim();
+  return t.includes('(') || /^this\._/.test(t);
+}
+
 /**
- * Generate placeholder text for a Lit expression like ${this.heading}.
+ * If `expr` is a ternary on a known prop (`this.x ? A : B`), evaluate it against
+ * the prop's default value and return the chosen branch as a literal string
+ * ('' when the branch is dynamic markup or empty). Returns null if not a ternary.
+ * This turns `${this.dismissible ? html`…` : ''}` (default false) into nothing,
+ * and `aria-busy=${this.loading ? 'true' : 'false'}` into "false".
+ */
+function evalTernary(expr, defaults) {
+  const m = expr.trim().match(/^this\.(\w+)\s*\?([\s\S]*?):([\s\S]*)$/);
+  if (!m) return null;
+  const branch = (isDefaultTruthy(defaults, m[1]) ? m[2] : m[3]).trim();
+  if (branch === '') return '';
+  const lit = branch.match(/^(['"])([\s\S]*)\1$/);
+  return lit ? lit[2] : '';
+}
+
+/** The default value of a simple `this.prop` reference (unquoted), or null. */
+function defaultValueFor(expr, defaults) {
+  const m = expr.trim().match(/^this\.(\w+)$/);
+  if (!m) return null;
+  const d = defaults[m[1]];
+  if (d === undefined || d === '') return null;
+  const lit = String(d).match(/^(['"])([\s\S]*)\1$/);
+  return lit ? lit[2] : String(d).trim();
+}
+
+/**
+ * Generate placeholder text for a simple public property, e.g. ${this.heading}.
+ * Returns '' for anything that can't be resolved to static display text (method
+ * or getter calls, private/computed members).
  */
 function placeholderForExpr(expr) {
-  // Extract property name: this.heading → heading, this.icon → icon
   const propMatch = expr.match(/this\.(\w+)/);
   if (!propMatch) return '';
-
   const prop = propMatch[1];
-
-  // Drop interpolations that can't be resolved to static content rather than
-  // emitting a mangled identifier as visible text/markup:
-  //   - method / getter calls: ${this._renderOverflow()}, ${this.fmt(x)}
-  //   - private / computed members: ${this._hasToc ? 'has-toc' : ''}
-  // These are exactly the patterns that make a component interactive, so a
-  // clean example simply omits the dynamic bit instead of showing "_render
-  // Overflow" / "_has Toc".
-  if (expr.includes('(') || prop.startsWith('_')) return '';
-  // Map common property names to sensible placeholder text
+  if (isUnresolvable(expr) || prop.startsWith('_')) return '';
   const placeholders = {
     heading: 'Heading',
     title: 'Title',
@@ -123,26 +165,39 @@ function placeholderForExpr(expr) {
     count: '0',
     badge: 'Badge',
   };
-
   if (placeholders[prop]) return placeholders[prop];
-
-  // Convert camelCase → Title Case
   return prop.replace(/([A-Z])/g, ' $1').replace(/^./, (s) => s.toUpperCase()).trim();
 }
 
 /**
- * Strip ${...} expressions from a Lit template, handling nested braces.
- * Replaces with placeholder text based on context.
- * For Lit binding attributes (@event, .prop, ?bool), removes the entire attribute.
+ * Resolve a ${...} expression to an attribute VALUE, or null to drop the whole
+ * attribute. Prefers ternary evaluation, then a known attribute default, then
+ * the referenced prop's own default; unresolved dynamic values are dropped so
+ * an example never carries junk like type="Type".
  */
-function stripExpressions(template) {
+function attrValueFor(attrName, expr, defaults) {
+  const tern = evalTernary(expr, defaults);
+  if (tern !== null) return tern === '' ? null : tern;
+  if (ATTR_VALUE_DEFAULTS[attrName] !== undefined) return ATTR_VALUE_DEFAULTS[attrName];
+  if (isUnresolvable(expr)) return null;
+  return defaultValueFor(expr, defaults);
+}
+
+/**
+ * Strip ${...} expressions from a Lit template, handling nested braces.
+ * Replaces with placeholder text based on context. Lit binding attributes
+ * (@event, .prop, ?bool) and unresolvable attribute values are removed entirely.
+ * @param {string} template
+ * @param {Record<string,string>} defaults - prop name → default value source
+ * @param {string} label - component label, used as fallback for empty elements
+ */
+function stripExpressions(template, defaults = {}, label = '') {
   let result = '';
   let i = 0;
 
   while (i < template.length) {
-    // Look for ${
     if (template[i] === '$' && template[i + 1] === '{') {
-      // Extract the expression by tracking brace depth
+      // Extract the expression by tracking brace depth.
       let depth = 1;
       let j = i + 2;
       while (j < template.length && depth > 0) {
@@ -152,53 +207,60 @@ function stripExpressions(template) {
       }
       const expr = template.slice(i + 2, j - 1).trim();
 
-      // Check context: are we inside a tag?
       const beforeExpr = result;
       const lastTagOpen = beforeExpr.lastIndexOf('<');
       const lastTagClose = beforeExpr.lastIndexOf('>');
       const inTag = lastTagOpen > lastTagClose;
 
       if (inTag) {
-        // Check if this is a Lit binding attribute: @event=${...}, .prop=${...}, ?attr=${...}
         const litBindingMatch = beforeExpr.match(/\s+([.?@][\w-]+)=$/);
-
-        // Check if this is an unquoted attribute value: name=${...}
-        // Determine if we're inside quotes by counting quote chars since last tag open
         const tagContent = beforeExpr.slice(lastTagOpen);
         const doubleQuotes = (tagContent.match(/"/g) || []).length;
         const insideQuotes = doubleQuotes % 2 === 1;
         const unquotedAttrMatch = !insideQuotes && beforeExpr.match(/\s+([\w-]+)=$/);
 
         if (litBindingMatch) {
-          // Remove the Lit binding attribute name + = from result
+          // Remove the Lit binding attribute name + = from result.
           result = result.slice(0, result.length - litBindingMatch[0].trimStart().length);
         } else if (unquotedAttrMatch) {
-          // Unquoted attribute value — provide quoted placeholder
           const attrName = unquotedAttrMatch[1];
-          if (attrName === 'href') result += '"#"';
-          else if (attrName === 'role') result += '"presentation"';
-          else if (attrName === 'aria-expanded') result += '"false"';
-          else if (attrName === 'aria-hidden') result += '"true"';
-          else result += `"${placeholderForExpr(expr)}"`;
-        } else {
-          // Inside a quoted attribute value
-          const attrMatch = beforeExpr.match(/([\w-]+)=["'][^"']*$/);
-          if (attrMatch) {
-            const attrName = attrMatch[1];
-            if (attrName === 'href') result += '#';
-            else if (attrName === 'src') result += '#';
-            else if (attrName === 'class') result += placeholderForExpr(expr);
-            else if (attrName === 'aria-label') result += placeholderForExpr(expr);
-            else if (attrName === 'aria-expanded') result += 'false';
-            else if (attrName === 'role') result += 'presentation';
-            else result += placeholderForExpr(expr);
+          const value = attrValueFor(attrName, expr, defaults);
+          if (value === null) {
+            // Drop the whole attribute (strip the `attrName=` already emitted).
+            result = result.slice(0, result.length - unquotedAttrMatch[0].length);
           } else {
-            result += placeholderForExpr(expr);
+            result += `"${value}"`;
           }
+        } else {
+          // Inside a quoted attribute value.
+          const attrMatch = beforeExpr.match(/([\w-]+)=["'][^"']*$/);
+          const attrName = attrMatch ? attrMatch[1] : null;
+          const tern = evalTernary(expr, defaults);
+          if (tern !== null) result += tern;
+          else if (attrName === 'href' || attrName === 'src') result += '#';
+          else if (attrName === 'class' || attrName === 'aria-label') result += placeholderForExpr(expr);
+          else if (attrName && ATTR_VALUE_DEFAULTS[attrName] !== undefined) result += ATTR_VALUE_DEFAULTS[attrName];
+          else result += placeholderForExpr(expr);
         }
       } else {
-        // Text content position
-        result += placeholderForExpr(expr);
+        // Text content position.
+        const tern = evalTernary(expr, defaults);
+        const text = tern !== null ? tern : placeholderForExpr(expr);
+        if (text) {
+          result += text;
+        } else {
+          // Unresolvable/empty. If this expression is the element's sole content
+          // (immediately after an opening tag and before a closing tag), fall
+          // back to the component label so the element isn't left blank — mirrors
+          // empty-slot handling. Otherwise drop it (e.g. an optional inline
+          // control sitting alongside other children).
+          const beforeTrimmed = result.replace(/\s+$/, '');
+          const restAfter = template.slice(j).replace(/^\s+/, '');
+          const lastLt = beforeTrimmed.lastIndexOf('<');
+          const afterOpeningTag =
+            beforeTrimmed.endsWith('>') && lastLt !== -1 && beforeTrimmed[lastLt + 1] !== '/';
+          if (afterOpeningTag && restAfter.startsWith('</')) result += label;
+        }
       }
 
       i = j;
@@ -242,11 +304,15 @@ function stripLitBindings(html) {
  * - <slot name="x"></slot> → keep default content or use placeholder
  */
 function replaceSlots(html, label) {
-  // Named slots with content: <slot name="x">default</slot> → keep default
+  // Named slots with plain-text fallback: <slot name="x">default</slot> → keep it
   let result = html.replace(
     /<slot\s+name="[^"]*">([^<]+)<\/slot>/g,
     (_, content) => content.trim() || label
   );
+  // Named slots with element/mixed fallback (e.g. <slot name="icon"><arc-icon…>)
+  // → drop entirely. The fallback is typically an internal or custom element
+  // that can't render in a static example, so leaving it leaks shadow internals.
+  result = result.replace(/<slot\s+name="[^"]*">[\s\S]*?<\/slot>/g, '');
   // Named slots without content: <slot name="x"></slot> → remove (empty)
   result = result.replace(/<slot\s+name="[^"]*"\s*><\/slot>/g, '');
   // Self-closing named slots
@@ -290,11 +356,13 @@ function cleanHTML(html) {
  */
 function templateToHTML(meta) {
   const label = meta.pascalName.replace(/([A-Z])/g, ' $1').trim();
+  const defaults = {};
+  for (const p of meta.props) defaults[p.name] = p.default;
 
   let html = meta.template;
 
   // 1. Strip ${...} expressions → sensible placeholders
-  html = stripExpressions(html);
+  html = stripExpressions(html, defaults, label);
 
   // 2. Remove Lit attribute prefixes and parts
   html = stripLitBindings(html);
@@ -405,9 +473,16 @@ function generateHTMLExternal(meta, config, root) {
   const tag = hostTag(meta);
   const snippet = formatSnippet(innerHTML, tag, `class="${meta.tag}"`);
 
+  // Reference the actual base-CSS filename (config.baseCSS) rather than a
+  // hard-coded "tokens.css", which may not exist for a given project.
+  const baseName = config.baseCSS ? config.baseCSS.split(/[/\\]/).pop() : null;
+  const requires = baseName
+    ? `requires ${cssFileName} + ${baseName} (or ${prefix}-ui.css)`
+    : `requires ${cssFileName} (or ${prefix}-ui.css)`;
+
   const lines = [
     HEADER,
-    `<!-- ${meta.tag} — requires ${cssFileName} + tokens.css (or ${prefix}-ui.css) -->`,
+    `<!-- ${meta.tag} — ${requires} -->`,
     snippet,
     '',
   ];

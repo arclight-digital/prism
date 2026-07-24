@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.0.4 — 2026-07-23
+
+### Fixed — CSS transform
+
+- **Comment-glue dead CSS.** A comment sitting between rules was prefixed with `.tag ` and fused onto the following selector; when that selector was itself `.tag`-anchored (every `:host([attr])` variant), the result was `.tag .tag[data-…]` — requiring a nested component and matching nothing. This had shipped broken variant/positioning CSS for 26 components (button sizes/variants, card, dock, float-bar, divider, stack, avatar, …). Comments are now preserved without being scoped. Comments containing braces are also handled.
+- **Single-quoted `:host()` attributes.** `:host([layout='centered'])` produced the invalid selector `.tag([layout='centered'])` (browsers drop it) because the attribute regexes only accepted double quotes. Single and double quotes are now both handled (and normalized to double quotes on output). Enum-value detection in the parser accepts single quotes too.
+- **`:host(.class)` selectors.** `:host(.dismissed)` fell through to the bare rule and emitted the invalid `.tag(.dismissed)`; it now becomes the compound `.tag.dismissed`.
+
+> Note: comma-separated selector lists were already fully scoped as of 2.0.0; consumers still seeing only the first selector scoped are looking at a stale bundle and should regenerate.
+
+### Fixed — HTML examples
+
+- **Blank flagship examples.** An element whose only content was an unresolvable interpolation (e.g. `<button>${this._renderContent()}</button>`) was left empty. It now falls back to the component-label placeholder, matching empty-slot handling.
+- **Ternary interpolations evaluated against prop defaults.** `${this.dismissible ? html`…` : ''}` no longer renders the stray text "Dismissible" (default `false` → nothing), and `aria-busy=${this.loading ? 'true' : 'false'}` resolves to `aria-busy="false"`.
+- **Shadow-internal slot leakage.** A named slot whose fallback is an element (e.g. `<slot name="icon"><arc-icon…></slot>`) is now dropped instead of leaking the `<slot>` and custom element into the output.
+- **Attribute placeholders.** Bound attributes get sensible defaults (`type="button"`, `aria-busy="false"`, `href="#"`, …) instead of the prop name (`type="Type"`); unresolvable bound attributes are dropped entirely rather than emitting `name=""`.
+- **Phantom `tokens.css` reference.** The external-CSS example header now names the actual configured `baseCSS` file instead of a hard-coded `tokens.css`.
+
 ## 2.0.3 — 2026-07-23
 
 ### Fixed

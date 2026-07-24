@@ -229,7 +229,8 @@ describe('generateHTML — complex templates', () => {
       );
       expect(content).not.toContain('_get Default Icon');
       expect(content).not.toContain('${');
-      expect(content).toContain('<span class="icon"></span>');
+      // Sole content of the element → falls back to the component label
+      expect(content).toContain('<span class="icon">Badge</span>');
     });
 
     it('drops private/computed members used in class expressions', () => {
@@ -256,7 +257,74 @@ describe('generateHTML — complex templates', () => {
       );
       expect(content).toContain('<h1>Heading</h1>');
       expect(content).not.toContain('_render Overflow');
-      expect(content).toContain('<span></span>');
+      // Sole content → label fallback (was blank in 2.0.3)
+      expect(content).toContain('<span>Badge</span>');
+    });
+  });
+
+  describe('2.0.4 fixes', () => {
+    it('fills an element left empty by an unresolvable call with the label', () => {
+      const meta = { ...baseMeta, template: '<button class="btn">${this._renderContent()}</button>' };
+      const content = readFileSync(generateHTML(meta, htmlConfig, tmpDir).results[0].path, 'utf-8');
+      expect(content).toContain('<button class="btn">Badge</button>');
+    });
+
+    it('evaluates a boolean-prop ternary against its default (text position)', () => {
+      const meta = {
+        ...baseMeta,
+        props: [{ name: 'dismissible', type: 'Boolean', default: 'false', reflect: true, values: [] }],
+        template: `<div class="hdr"><span>x</span>\${this.dismissible ? '[dismiss]' : ''}</div>`,
+      };
+      const content = readFileSync(generateHTML(meta, htmlConfig, tmpDir).results[0].path, 'utf-8');
+      expect(content).not.toContain('Dismissible');
+      expect(content).not.toContain('[dismiss]');
+    });
+
+    it('evaluates a ternary in an attribute against the default', () => {
+      const meta = {
+        ...baseMeta,
+        props: [{ name: 'loading', type: 'Boolean', default: 'false', reflect: false, values: [] }],
+        template: `<button aria-busy=\${this.loading ? 'true' : 'false'}><slot></slot></button>`,
+      };
+      const content = readFileSync(generateHTML(meta, htmlConfig, tmpDir).results[0].path, 'utf-8');
+      expect(content).toContain('aria-busy="false"');
+      expect(content).not.toContain('Loading');
+    });
+
+    it('gives bound attributes sensible defaults instead of the prop name', () => {
+      const meta = {
+        ...baseMeta,
+        props: [{ name: 'type', type: 'String', default: "'button'", reflect: false, values: [] }],
+        template: '<button type=${this.type}><slot></slot></button>',
+      };
+      const content = readFileSync(generateHTML(meta, htmlConfig, tmpDir).results[0].path, 'utf-8');
+      expect(content).toContain('type="button"');
+      expect(content).not.toContain('type="Type"');
+    });
+
+    it('drops an unresolvable bound attribute entirely', () => {
+      const meta = { ...baseMeta, template: '<i name=${this._getDefaultIcon()}></i>' };
+      const content = readFileSync(generateHTML(meta, htmlConfig, tmpDir).results[0].path, 'utf-8');
+      expect(content).not.toContain('name=""');
+      expect(content).not.toContain('name="_get');
+    });
+
+    it('drops named slots whose fallback is an element (no shadow-internal leak)', () => {
+      const meta = {
+        ...baseMeta,
+        template: '<span class="ic"><slot name="icon"><arc-icon name="star"></arc-icon></slot></span>',
+      };
+      const content = readFileSync(generateHTML(meta, htmlConfig, tmpDir).results[0].path, 'utf-8');
+      expect(content).not.toContain('arc-icon');
+      expect(content).not.toContain('<slot');
+    });
+
+    it('references the actual baseCSS filename in the header, not tokens.css', () => {
+      const meta = { ...baseMeta };
+      const cfg = { outDir: 'out/html', baseCSS: 'styles/base.css', prefix: 'arc', inlineVariant: false };
+      const content = readFileSync(generateHTML(meta, cfg, tmpDir).results[0].path, 'utf-8');
+      expect(content).toContain('base.css');
+      expect(content).not.toContain('tokens.css');
     });
   });
 });

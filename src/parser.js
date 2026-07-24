@@ -232,9 +232,9 @@ function detectEnumValues(props, css) {
     if (prop.type !== 'String') continue;
 
     const values = new Set();
-    // Match :host([propName="value"]) patterns
+    // Match :host([propName="value"]) patterns (single or double quotes)
     const enumPattern = new RegExp(
-      `:host\\(\\[${prop.name}="([^"]+)"\\]\\)`,
+      `:host\\(\\[${prop.name}=["']([^"']+)["']\\]\\)`,
       'g'
     );
     let match;
