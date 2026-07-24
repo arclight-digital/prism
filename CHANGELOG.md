@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.5 — 2026-07-23
+
+### Fixed
+
+- **Comment-aware selector splitting (regression from 2.0.4).** The comma-list splitter didn't skip `/* … */` comments, so a comment whose prose contained parentheses and commas (e.g. `(never …), which`) made the splitter break *inside the comment*. That shattered the comment, left the following selector unscoped, and leaked the `.tag ` prefix into the comment text. A multi-line comment sitting directly before a comma-separated rule is now handled correctly: the comment is preserved verbatim and every selector in the list is scoped. (Surfaced in arc-ui's tooltip, qr-code, and code-block CSS.)
+
 ## 2.0.4 — 2026-07-23
 
 ### Fixed — CSS transform

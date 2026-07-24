@@ -204,16 +204,27 @@ function scopeSelectorList(prelude, tag, scopedRe) {
     .join(',');
 }
 
-/** Split on a delimiter, ignoring delimiters inside (), [], or quotes. */
+/** Split on a delimiter, ignoring delimiters inside (), [], quotes, or comments. */
 function splitTopLevel(str, delim) {
   const parts = [];
   let depth = 0;
   let quote = null;
   let cur = '';
-  for (const ch of str) {
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
     if (quote) {
       cur += ch;
       if (ch === quote) quote = null;
+      continue;
+    }
+    // Skip comments wholesale — prose commas/parens inside a `/* … */` block
+    // must not affect depth or trigger a split (a comment can even fall between
+    // two comma-separated selectors).
+    if (ch === '/' && str[i + 1] === '*') {
+      const end = str.indexOf('*/', i + 2);
+      const stop = end === -1 ? str.length : end + 2;
+      cur += str.slice(i, stop);
+      i = stop - 1;
       continue;
     }
     if (ch === '"' || ch === "'") { quote = ch; cur += ch; continue; }

@@ -188,4 +188,32 @@ describe('shadowToLight', () => {
     expect(result).toContain('.arc-callout.dismissed');
     expect(result).not.toContain('.arc-callout(');
   });
+
+  it('scopes a whole comma list preceded by a multi-line comment', () => {
+    // Regression: a multi-line comment containing prose parens/commas
+    // (e.g. "(never …), which") caused splitTopLevel to split *inside* the
+    // comment, shattering it and leaving the first real selector unscoped while
+    // the scope prefix leaked into the comment text.
+    const css = `/* No-JS fallback (never in the template, so it can't leak), which
+   disables this rule and leaves the delay in charge. */
+.trigger:hover + .popup:not(.is-managed),
+.trigger:focus-within + .popup:not(.is-managed) {
+  opacity: 1;
+}`;
+    const result = shadowToLight(css, 'arc-tooltip');
+    expect(result).toContain('.arc-tooltip .trigger:hover + .popup:not(.is-managed)');
+    expect(result).toContain('.arc-tooltip .trigger:focus-within + .popup:not(.is-managed)');
+    // Comment preserved intact, never scoped or injected into.
+    expect(result).not.toContain('.arc-tooltip /*');
+    const comment = result.match(/\/\*[\s\S]*?\*\//)[0];
+    expect(comment).not.toContain('.arc-tooltip');
+  });
+
+  it('does not split or scope a comment whose prose contains a comma', () => {
+    const css = '/* Scanners decode dark-on-light, both themes, regardless of --qr-fg */\n.qr { fill: black; }';
+    const result = shadowToLight(css, 'arc-qr-code');
+    expect(result).toContain('.arc-qr-code .qr');
+    const comment = result.match(/\/\*[\s\S]*?\*\//)[0];
+    expect(comment).not.toContain('.arc-qr-code');
+  });
 });
