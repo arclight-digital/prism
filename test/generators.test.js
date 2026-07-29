@@ -255,7 +255,7 @@ describe('generateAngular — two-way bindings', () => {
 
   it('routes bound events through a method that writes back and emits both', () => {
     const content = generate(boundMeta);
-    expect(content).toContain('(arc-input)="onArcInput($event)"');
+    expect(content).toContain('(arc-input)="this.onArcInput($event)"');
     expect(content).toContain('onArcInput(event: CustomEvent) {');
     expect(content).toContain('this.arcInput.emit(event);');
     expect(content).toContain('const next = detail.value as number;');
@@ -265,7 +265,7 @@ describe('generateAngular — two-way bindings', () => {
 
   it('leaves unbound events on the direct emit', () => {
     const content = generate({ ...boundMeta, events: ['arc-input', 'arc-focus'] });
-    expect(content).toContain('(arc-focus)="arcFocus.emit($event)"');
+    expect(content).toContain('(arc-focus)="this.arcFocus.emit($event)"');
   });
 
   it('emits nothing extra when no detail key matches a prop', () => {
@@ -274,7 +274,7 @@ describe('generateAngular — two-way bindings', () => {
     // `valueChange` should be absent.
     expect(content).not.toContain('valueChange');
     expect(content).not.toContain('onArcInput(');
-    expect(content).toContain('(arc-input)="arcInput.emit($event)"');
+    expect(content).toContain('(arc-input)="this.arcInput.emit($event)"');
   });
 
   it('honours a config.bindings exclude', () => {
@@ -403,12 +403,12 @@ describe('event wiring (regressions)', () => {
       generateAngular(arrMeta, config('out/angular'), tmpDir).path,
       'utf-8',
     );
-    expect(content).toContain('[items]="items"');
-    expect(content).toContain('[config]="config"');
+    expect(content).toContain('[items]="this.items"');
+    expect(content).toContain('[config]="this.config"');
     expect(content).not.toContain('[attr.items]');
     expect(content).not.toContain('[attr.config]');
     // String props still bind as attributes
-    expect(content).toContain('[attr.label]="label"');
+    expect(content).toContain('[attr.label]="this.label"');
   });
 
   it('Solid exposes a typed handler prop and binds via on: namespace', () => {
@@ -768,5 +768,144 @@ describe('sweepOrphans — no double-reporting with per-component pruning', () =
     const htmlOut = generateHTML(interactive, cfg.html, tmpDir, { prune: true });
     expect(cssOut.removed).toHaveLength(1);
     expect(htmlOut.removed).toHaveLength(2);
+  });
+});
+
+describe('reserved words in binding position', () => {
+  /**
+   * True if `pattern` is a legal JS destructuring pattern. Checked in strict
+   * mode inside an async function so `let`, `static`, `yield` and `await` —
+   * reserved only in those contexts — are caught too.
+   */
+  const isValidBindingPattern = (pattern) => {
+    try {
+      new Function(`"use strict"; (async function ({${pattern}}) {});`);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  /** @type {import('../src/parser.js').ComponentMeta} */
+  const labelMeta = {
+    tag: 'arc-label',
+    className: 'ArcLabel',
+    pascalName: 'Label',
+    tier: 'content',
+    props: [
+      { name: 'for', type: 'String', default: "''", reflect: true, values: [] },
+      { name: 'text', type: 'String', default: "''", reflect: false, values: [] },
+    ],
+    css: ':host { display: block; }',
+    template: '<label><slot></slot></label>',
+    events: ['arc-change'],
+    eventDetails: { 'arc-change': ['for'] },
+    interactivity: 'static',
+    hostDisplay: 'block',
+  };
+
+  it('Svelte renames the local and keeps the attribute name', () => {
+    const result = generateSvelte(labelMeta, config('out/svelte'), tmpDir);
+    const content = readFileSync(result.path, 'utf-8');
+
+    const pattern = content.match(/let \{ (.*) \}: Props = \$props\(\);/)[1];
+    expect(isValidBindingPattern(pattern)).toBe(true);
+    expect(pattern).toContain('for: forProp');
+
+    // Interface key and attribute keep the real name; only the local moves.
+    expect(content).toContain('for?: string;');
+    expect(content).toContain('for={forProp}');
+    expect(content).not.toMatch(/\{for\}/);
+    // Write-back assigns the local, but still reads the real detail key.
+    expect(content).toContain('forProp = detail.for as');
+  });
+
+  it('Preact renames the local and keeps the JSX attribute name', () => {
+    const result = generatePreact(labelMeta, config('out/preact'), tmpDir);
+    const content = readFileSync(result.path, 'utf-8');
+
+    const pattern = content.match(/FunctionComponent<LabelProps> = \(\{ (.*?) \}\) =>/)[1];
+    expect(isValidBindingPattern(pattern)).toBe(true);
+    expect(pattern).toContain('for: forProp');
+
+    expect(content).toContain('for?: string;');
+    expect(content).toContain('for={forProp}');
+  });
+
+  it('Vue reads props through the props object rather than bare identifiers', () => {
+    const result = generateVue(labelMeta, config('out/vue'), tmpDir);
+    const content = readFileSync(result.path, 'utf-8');
+
+    expect(content).toContain('const props = withDefaults(defineProps<{');
+    expect(content).toContain(':for="props.for"');
+    expect(content).toContain(':text="props.text"');
+    expect(content).not.toContain(':for="for"');
+  });
+
+  it('Vue captures the props object when the component declares no defaults', () => {
+    const noDefaults = {
+      ...labelMeta,
+      props: labelMeta.props.map((p) => ({ ...p, default: '' })),
+    };
+    const result = generateVue(noDefaults, config('out/vue-nd'), tmpDir);
+    const content = readFileSync(result.path, 'utf-8');
+    expect(content).toContain('const props = defineProps<{');
+    expect(content).toContain(':for="props.for"');
+  });
+
+  it('does not collide when the component also declares the renamed prop', () => {
+    const both = {
+      ...labelMeta,
+      props: [
+        { name: 'for', type: 'String', default: "''", reflect: true, values: [] },
+        { name: 'forProp', type: 'String', default: "''", reflect: false, values: [] },
+      ],
+      eventDetails: {},
+      events: [],
+    };
+    const content = readFileSync(
+      generateSvelte(both, config('out/svelte-collide'), tmpDir).path,
+      'utf-8',
+    );
+    const pattern = content.match(/let \{ (.*) \}: Props = \$props\(\);/)[1];
+    expect(isValidBindingPattern(pattern)).toBe(true);
+    expect(pattern).toContain('for: forProp_');
+    expect(content).toContain('for={forProp_}');
+    expect(content).toContain('{forProp}');
+  });
+
+  it('Angular qualifies template expressions so its own keywords parse', () => {
+    // `as` is a keyword in Angular's template grammar but not in JavaScript,
+    // so the class field is fine and only the expression needed qualifying.
+    const textMeta = {
+      ...labelMeta,
+      tag: 'arc-text',
+      className: 'ArcText',
+      pascalName: 'Text',
+      props: [
+        { name: 'as', type: 'String', default: "'p'", reflect: true, values: [] },
+        { name: 'wrap', type: 'Boolean', default: 'false', reflect: false, values: [] },
+      ],
+      eventDetails: {},
+    };
+    const content = readFileSync(
+      generateAngular(textMeta, config('out/angular-kw'), tmpDir).path,
+      'utf-8',
+    );
+    expect(content).toContain('[attr.as]="this.as"');
+    expect(content).toContain('[wrap]="this.wrap"');
+    expect(content).toContain('(arc-change)="this.arcChange.emit($event)"');
+    expect(content).not.toContain('[attr.as]="as"');
+    // The class field keeps the real name — reserved words are legal there.
+    expect(content).toContain("@Input() as: string = 'p';");
+  });
+
+  it('leaves ordinary prop names untouched', () => {
+    const content = readFileSync(
+      generateSvelte(meta, config('out/svelte-plain'), tmpDir).path,
+      'utf-8',
+    );
+    expect(content).toContain('{variant}');
+    expect(content).not.toContain('variantProp');
   });
 });

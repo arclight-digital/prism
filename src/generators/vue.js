@@ -83,8 +83,13 @@ export function generateVue(meta, config, root) {
       .map((p) => `  ${p.name}?: ${tsType(p)};`)
       .join('\n');
 
+    // The props object is captured rather than left unassigned so the template
+    // can read every prop through it. A prop named after a reserved word
+    // (`for`, `class`, `default`) is illegal as a bare identifier in a template
+    // expression but fine as a property access, so `props.for` retires the
+    // whole class of problem instead of special-casing individual names.
     if (hasDefaults) {
-      lines.push(`withDefaults(defineProps<{`);
+      lines.push(`const props = withDefaults(defineProps<{`);
       lines.push(propsBlock);
       lines.push(`}>(), {`);
       for (const prop of meta.props) {
@@ -95,7 +100,7 @@ export function generateVue(meta, config, root) {
       }
       lines.push(`});`);
     } else {
-      lines.push(`defineProps<{`);
+      lines.push(`const props = defineProps<{`);
       lines.push(propsBlock);
       lines.push(`}>();`);
     }
@@ -132,8 +137,9 @@ export function generateVue(meta, config, root) {
   // than inline in the template so the `in` guard is readable.
   const handlers = new Map();
   if (twoWay.size > 0) {
-    // Seed with prop names so a handler can never shadow a prop in the template.
-    const used = new Set(meta.props.map((p) => p.name));
+    // Seed with prop names — and `props` itself — so a handler can never
+    // shadow either in the template.
+    const used = new Set([...meta.props.map((p) => p.name), 'props']);
     lines.push('');
     for (const [event, props] of twoWay) {
       const fn = handlerName(event, used);
@@ -157,7 +163,7 @@ export function generateVue(meta, config, root) {
   lines.push('<template>');
 
   // Build attribute and event bindings on the wrapped element.
-  const bindings = meta.props.map((p) => `    :${p.name}="${p.name}"`);
+  const bindings = meta.props.map((p) => `    :${p.name}="props.${p.name}"`);
   const eventBindings = meta.events.map((e) => (
     handlers.has(e)
       ? `    @${e}="${handlers.get(e)}"`

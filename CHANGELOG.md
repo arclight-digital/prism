@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.4.0 — 2026-07-29
+
+### Fixed — reserved words in binding position
+
+A prop named after a reserved word is a perfectly good attribute but not a legal identifier, and prism had no handling for the difference anywhere. Both of 2.3.0's known issues were instances of it: `arc-label` declares `for`, so `Label.svelte` emitted `let { for = '', … } = $props()` and `Label.tsx` emitted `({ for, … }) =>`; `arc-text` declares `as`, so `Text.ts`'s Angular template read `[attr.as]="as"`. None of the three compiled. The attribute name is public API and is unchanged in every case; only the binding moves.
+
+- **Svelte and Preact** rename the local on the way in — `for: forProp` — and spell the attribute out (`for={forProp}`) instead of using the `{for}` / `for={for}` shorthand. The interface key, the attribute, and the element's own property all keep the real name, as does the event `detail` key a two-way binding reads from. The rename is checked against the component's own prop set, so a component declaring both `for` and `forProp` gets `forProp_` rather than a collision.
+- **Vue** takes the props object instead: `defineProps` was previously called for its side effect, and is now assigned to `const props`, with the template reading `:for="props.for"`.
+- **Angular** qualifies every template expression with `this.` — `[attr.as]="this.as"`, `(arc-input)="this.arcInput.emit($event)"`. Angular's template grammar has its own keyword list (`as`, `in`, `let`, `var`, `this`, …) that doesn't match JavaScript's, which is why `for` parsed there and `as` didn't. The class field was never the problem: reserved words are legal property names, so `@Input() as` was always fine.
+- React, Solid and Preact's interface keys were never affected — all three reach props through property access or an object key, both of which accept any name.
+
+For Vue and Angular the fix is property access rather than a rename, which is legal for every name and so retires the whole class of problem instead of special-casing the words that collide today. Angular's wrapper diff is the broad one: every prop and event binding in every generated template gains the `this.` prefix.
+
+### Changed — enum unions come from the docs first
+
+`prop.values` was populated solely by scanning CSS for `:host([prop="value"])` rules, which is structurally unable to see two things. The **default member** normally has no attribute selector to be inferred from — it's the unqualified base style — so a three-member union came back with two, and every wrapper's type was missing the one value most consumers pass. And a variant handled **in JS** leaves no selector at all, so the union came back empty and the prop collapsed to a bare `string`.
+
+A documented `@prop {'small' | 'medium' | 'large'} size` union on the class JSDoc is now read first, and the CSS scan is the fallback for props that don't have one. Only string-literal unions are read — `{string}`, `{number}` and other types are left to the existing type map. All six generators already consume `prop.values`, so this corrects React, Vue, Svelte, Angular, Solid and Preact at once. Expect a large but mechanical wrapper diff: in arc-ui, 35 props regain their missing default member and 33 regain a union that had collapsed to `string`.
+
+Where both sources exist they're compared: a value the CSS styles but the documented union omits is genuine doc drift, and prism is the only thing positioned to see both, so it now warns. The documented union still wins — the warning is advisory.
+
 ## 2.3.0 — 2026-07-29
 
 ### Added

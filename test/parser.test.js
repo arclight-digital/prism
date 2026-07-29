@@ -654,3 +654,111 @@ describe('extractTemplate — elements built into a local first', () => {
     expect(lines[open + 1].match(/^\s*/)[0]).toBe('      ');
   });
 });
+
+describe('documented enum unions (@prop)', () => {
+  it('reads a string-literal union from the class JSDoc', () => {
+    const source = `
+      /**
+       * @tag arc-badge
+       * @prop {'neutral' | 'success' | 'danger'} tone
+       */
+      export class ArcBadge extends LitElement {
+        static properties = { tone: { type: String } };
+        constructor() { super(); this.tone = 'neutral'; }
+      }
+    `;
+    const meta = parseComponent(source, '/src/content/badge.js', prefix);
+    const tone = meta.props.find((p) => p.name === 'tone');
+    expect(tone.values).toEqual(['neutral', 'success', 'danger']);
+  });
+
+  it('keeps the documented union when CSS only styles the non-default members', () => {
+    // The default member has no :host([size="…"]) rule to be inferred from —
+    // it is the unqualified base style — so CSS alone loses it.
+    const source = `
+      /**
+       * @tag arc-avatar
+       * @prop {'small' | 'medium' | 'large'} size
+       */
+      export class ArcAvatar extends LitElement {
+        static properties = { size: { type: String } };
+        constructor() { super(); this.size = 'medium'; }
+        static styles = css\`
+          :host { width: 32px; }
+          :host([size="small"]) { width: 24px; }
+          :host([size="large"]) { width: 48px; }
+        \`;
+      }
+    `;
+    const meta = parseComponent(source, '/src/content/avatar.js', prefix);
+    const size = meta.props.find((p) => p.name === 'size');
+    expect(size.values).toEqual(['small', 'medium', 'large']);
+  });
+
+  it('survives when the variants are driven from JS and there is no CSS at all', () => {
+    const source = `
+      /**
+       * @tag arc-label
+       * @prop {'inline' | 'stacked'} layout
+       */
+      export class ArcLabel extends LitElement {
+        static properties = { layout: { type: String } };
+        constructor() { super(); this.layout = 'inline'; }
+      }
+    `;
+    const meta = parseComponent(source, '/src/content/label.js', prefix);
+    const layout = meta.props.find((p) => p.name === 'layout');
+    expect(layout.values).toEqual(['inline', 'stacked']);
+  });
+
+  it('leaves non-literal documented types alone', () => {
+    const source = `
+      /**
+       * @tag arc-field
+       * @prop {string} label
+       * @prop {number} max
+       */
+      export class ArcField extends LitElement {
+        static properties = { label: { type: String }, max: { type: Number } };
+      }
+    `;
+    const meta = parseComponent(source, '/src/content/field.js', prefix);
+    expect(meta.props.find((p) => p.name === 'label').values).toEqual([]);
+    expect(meta.props.find((p) => p.name === 'max').values).toEqual([]);
+  });
+
+  it('warns when the CSS styles a value the documented union omits', () => {
+    const source = `
+      /**
+       * @tag arc-chip
+       * @prop {'solid' | 'outline'} variant
+       */
+      export class ArcChip extends LitElement {
+        static properties = { variant: { type: String } };
+        static styles = css\`
+          :host([variant="outline"]) { border: 1px solid; }
+          :host([variant="ghost"]) { border: none; }
+        \`;
+      }
+    `;
+    const warnings = [];
+    const original = console.warn;
+    console.warn = (msg) => warnings.push(msg);
+    let meta;
+    try {
+      meta = parseComponent(source, '/src/content/chip.js', prefix);
+    } finally {
+      console.warn = original;
+    }
+    // The documented union still wins — the warning is advisory.
+    expect(meta.props.find((p) => p.name === 'variant').values).toEqual(['solid', 'outline']);
+    expect(warnings.join('\n')).toContain('"ghost"');
+    expect(warnings.join('\n')).toContain('arc-chip');
+  });
+
+  it('still infers from CSS when nothing is documented', () => {
+    const meta = parseComponent(fixture, filePath, prefix);
+    expect(meta.props.find((p) => p.name === 'variant').values)
+      .toEqual(['primary', 'secondary']);
+  });
+});

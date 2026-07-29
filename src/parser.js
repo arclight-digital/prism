@@ -9,7 +9,8 @@
  * @property {string} type - String, Boolean, Number, Array, Object
  * @property {string} default - default value as source string
  * @property {boolean} reflect
- * @property {string[]} values - detected enum values (from CSS :host patterns)
+ * @property {string[]} values - enum values, from the `@prop` JSDoc union if one
+ *   is documented, otherwise inferred from CSS `:host([prop="value"])` patterns
  */
 
 /**
@@ -89,8 +90,10 @@ export function parseComponent(source, filePath, prefix = 'arc', overrides = {})
   // Parse CSS from static styles
   const css = extractCSS(source);
 
-  // Detect enum values from CSS :host([prop="value"]) patterns
-  detectEnumValues(props, css);
+  // Read documented unions first — they are authored intent, and the CSS pass
+  // below is only a fallback for props with no `@prop` union to go on.
+  applyDocTypes(props, source);
+  detectEnumValues(props, css, tag);
 
   // Parse template from render(). Defaults are needed to pick the branch of a
   // conditionally-built element, so this must run after applyDefaults above.
@@ -224,6 +227,30 @@ function applyDefaults(props, source) {
 }
 
 /**
+ * Read documented string-literal unions from the class JSDoc.
+ *
+ * Authored intent beats CSS inference on both counts it gets wrong: the default
+ * member usually carries no `:host([x="…"])` rule to be inferred from — it is
+ * the unqualified base style — and a variant driven from JS leaves no CSS
+ * attribute selector at all, so the union comes back empty and the prop
+ * collapses to a bare `string` in every wrapper.
+ *
+ * @param {PropMeta[]} props
+ * @param {string} source
+ */
+function applyDocTypes(props, source) {
+  const byName = new Map(props.map((p) => [p.name, p]));
+  for (const m of source.matchAll(/@prop\s+\{([^}]+)\}\s+(\w+)/g)) {
+    const [, typeText, name] = m;
+    const prop = byName.get(name);
+    if (!prop) continue;
+    // Only literal unions — leave `{string}`, `{number}` etc. to the type map.
+    if (!/^\s*'[^']*'(\s*\|\s*'[^']*')*\s*$/.test(typeText)) continue;
+    prop.values = [...new Set([...typeText.matchAll(/'([^']*)'/g)].map((v) => v[1]))];
+  }
+}
+
+/**
  * Extract CSS from `css\`...\`` template literals in static styles.
  */
 function extractCSS(source) {
@@ -239,8 +266,17 @@ function extractCSS(source) {
 
 /**
  * Detect enum values from CSS :host([prop="value"]) patterns.
+ *
+ * A fallback for props with no documented union — see applyDocTypes. Where both
+ * sources exist the documented one wins, but the CSS is still read so the two
+ * can be compared: a styled value the docs don't list is genuine drift, and
+ * this is the only pass positioned to see both.
+ *
+ * @param {PropMeta[]} props
+ * @param {string} css
+ * @param {string} [tag] - component tag, for drift warnings
  */
-function detectEnumValues(props, css) {
+function detectEnumValues(props, css, tag) {
   for (const prop of props) {
     if (prop.type !== 'String') continue;
 
@@ -253,6 +289,18 @@ function detectEnumValues(props, css) {
     let match;
     while ((match = enumPattern.exec(css)) !== null) {
       values.add(match[1]);
+    }
+
+    if (prop.values.length > 0) {
+      const documented = new Set(prop.values);
+      const undocumented = [...values].filter((v) => !documented.has(v));
+      if (undocumented.length > 0) {
+        console.warn(
+          `prism: ${tag ?? 'component'} styles ${prop.name} value(s) ` +
+          `${undocumented.map((v) => `"${v}"`).join(', ')} that its documented union omits`
+        );
+      }
+      continue;   // documented union wins
     }
 
     if (values.size > 0) {

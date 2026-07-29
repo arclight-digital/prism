@@ -54,7 +54,7 @@ Prism generates:
 | **CSS** | Shadow DOM CSS transformed to light DOM (`:host` &rarr; `.arc-button`, scoped inner selectors) |
 | **CSS bundle** | All components combined into a single `arc-ui.css` with design tokens |
 
-Enum values are auto-detected from `:host([variant="value"])` patterns in the CSS. Props, defaults, types, events, and interactivity level are all extracted automatically.
+Enum values come from a documented `@prop {'primary' | 'secondary'} variant` union when there is one, and are otherwise auto-detected from `:host([variant="value"])` patterns in the CSS. Props, defaults, types, events, and interactivity level are all extracted automatically.
 
 Custom events (`dispatchEvent(new CustomEvent('arc-change'))`) become typed handler props in every wrapper — `onArcChange` in React/Solid/Preact, a wired `defineEmits` listener in Vue, and an `@Output()` in Angular — so a consumer's handler actually fires. (Preact binds via a ref effect, since its `on*` convention can't target hyphenated event names.)
 
@@ -194,7 +194,7 @@ Prism uses regex-based parsing (no AST library) to extract metadata from Lit sou
 2. **Properties** from `static properties = { ... }`, `static get properties() { ... }`, or `@property()` decorators — extracts name, type, and reflect. Internal `{ state: true }` / `@state()` members are excluded from the public surface.
 3. **Defaults** from `constructor() { this.variant = 'primary'; }` — assignments after nested blocks (`if`/`for`/`try`) are handled.
 4. **CSS** from `` css`...` `` template literals
-5. **Enum values** from `:host([prop="value"])` patterns in the CSS
+5. **Enum values** from a `@prop {'a' | 'b'} name` JSDoc union, falling back to `:host([prop="value"])` patterns in the CSS. The documented union wins because CSS can only see what CSS styles: the default member usually has no attribute selector to be inferred from, and a variant driven from JS leaves no selector at all. Where both exist, a styled value the union omits is reported as doc drift.
 6. **Template** from `render() { return html`...`; }` — supports variable inlining when templates are built from multiple `html`` ` blocks
 7. **Events** from `dispatchEvent(new CustomEvent('name'))` calls — including the top-level keys of each event's `detail` object, which is what [two-way bindings](#two-way-bindings) are derived from
 8. **Host display** from `:host { display: ... }` — determines whether HTML output uses `<div>` or `<span>` wrapper

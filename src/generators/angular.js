@@ -105,20 +105,28 @@ export function generateAngular(meta, config, root) {
   // stringifies via toString() (`[1,2,3]` → "1,2,3", objects → "[object
   // Object]"), which Lit's JSON.parse attribute converter then rejects and
   // nulls. String/Number reflect fine as attributes.
+  //
+  // Every expression is qualified with `this.` — Angular's template grammar has
+  // its own keyword list (`as`, `in`, `let`, `var`, `this`, …) that doesn't
+  // match JavaScript's, and a bare member of it doesn't parse. `arc-text`
+  // declares `as`, so `[attr.as]="as"` failed to compile. The class field is
+  // unaffected: reserved words are legal property names. `this.as` is legal for
+  // every name, so this retires the whole class of problem rather than
+  // special-casing the words that happen to collide today.
   const templateAttrs = meta.props.map((p) => {
     if (p.type === 'Boolean' || p.type === 'Array' || p.type === 'Object') {
-      return `[${p.name}]="${p.name}"`;
+      return `[${p.name}]="this.${p.name}"`;
     }
-    return `[attr.${p.name}]="${p.name}"`;
+    return `[attr.${p.name}]="this.${p.name}"`;
   });
 
   // Add event listeners in template. Events that write a prop back route
   // through a class method instead, so the write and both emits stay together.
   for (const event of meta.events) {
     if (handlers.has(event)) {
-      templateAttrs.push(`(${event})="${handlers.get(event)}($event)"`);
+      templateAttrs.push(`(${event})="this.${handlers.get(event)}($event)"`);
     } else {
-      templateAttrs.push(`(${event})="${eventToCamel(event)}.emit($event)"`);
+      templateAttrs.push(`(${event})="this.${eventToCamel(event)}.emit($event)"`);
     }
   }
 
