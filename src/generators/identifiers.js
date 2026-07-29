@@ -31,6 +31,36 @@ export function safeIdent(name, taken = new Set()) {
 }
 
 /**
+ * Map each named slot to the identifier its snippet prop binds to.
+ *
+ * Slot names are HTML, snippet props are identifiers, and the two grammars don't
+ * agree: `slot="icon-left"` is perfectly legal markup and cannot be a binding
+ * name, so it becomes `iconLeft`. That has a consequence worth knowing — Svelte
+ * derives the prop name from the `slot` attribute verbatim, so the legacy
+ * `<x slot="icon-left">` form can't reach a prop called `iconLeft`; only the
+ * `{#snippet iconLeft()}` form can.
+ *
+ * @param {string[]} slots
+ * @param {import('../parser.js').PropMeta[]} props
+ * @returns {Map<string, string>} slot name → snippet prop identifier
+ */
+export function slotSnippetNames(slots, props) {
+  const taken = new Set([...props.map((p) => p.name), 'children', 'rest']);
+  const out = new Map();
+  for (const slot of slots) {
+    // `icon-left` → `iconLeft`; anything else non-word is dropped the same way.
+    let base = slot.replace(/[^A-Za-z0-9]+(.)?/g, (_, c) => (c ? c.toUpperCase() : ''));
+    if (!/^[A-Za-z_]/.test(base)) base = `slot${base.charAt(0).toUpperCase()}${base.slice(1)}`;
+    base = safeIdent(base, taken);
+    let name = base;
+    while (taken.has(name)) name += '_';
+    taken.add(name);
+    out.set(slot, name);
+  }
+  return out;
+}
+
+/**
  * Prop names each framework takes for itself.
  *
  * A different failure mode from the JS reserved words above, and a worse one.

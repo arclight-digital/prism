@@ -153,6 +153,32 @@ Every heading in the human report carries the literal prefix `prism: warning:` (
 
 `code` is the stable contract; `message` is for humans and will be reworded. A failure to write the report never fails the generate run.
 
+### Named slots
+
+A component with `<slot name="start">` gets a snippet prop per slot in the Svelte wrapper, and a forwarded `<slot name="start" />` in the Vue one. React, Preact, Solid and Angular need nothing — none of them treats `slot` as more than an attribute, so it reaches the element on its own.
+
+**The `slot` attribute goes on your own element.** The wrapper adds no carrier element around your content, deliberately: a wrapper node between the shadow slot and your markup would break `::slotted()` rules and any layout the slot applies to its children. Which means the attribute has to come from you:
+
+```svelte
+<Toolbar>
+  {#snippet start()}
+    <button slot="start">Play</button>
+  {/snippet}
+  <span>default content</span>
+</Toolbar>
+```
+
+```vue
+<Toolbar>
+  <template #start><button slot="start">Play</button></template>
+  <span>default content</span>
+</Toolbar>
+```
+
+Inside a snippet or a `<template #…>` body, `slot="start"` is ordinary markup and reaches the element intact. The older Svelte form — `<button slot="start">` as a direct child of the component — depends on Svelte preserving the attribute when it converts that child into a snippet prop; the explicit form above doesn't.
+
+Slot names that aren't valid identifiers can't be snippet props, so `slot="icon-left"` is exposed as `iconLeft`. Svelte takes the prop name from the attribute verbatim, so `{#snippet iconLeft()}` reaches it and `slot="icon-left"` on a direct child doesn't. Prism reports each remapped name (`slot-name-remapped`) rather than leaving you to discover it; rename the slot on the component if both forms need to work.
+
 ### What the generated Props accept
 
 The Svelte, Preact and Solid interfaces list the component's own props, then an escape hatch for everything a consumer might pass through to the element: the common global HTML attributes by name (`class`, `id`, `style`, `role`, `part`, `tabindex`, `hidden`, …), plus pattern index signatures for `data-*`, `aria-*` and `on*`. The `on*` pattern is what lets a Svelte consumer attach `onarc-input` through the spread.

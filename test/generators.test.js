@@ -1048,3 +1048,81 @@ describe('Props escape hatch (P4)', () => {
     expect(content).toContain("(rest['onarc-input'] as ((e: Event) => void) | undefined)?.(e);");
   });
 });
+
+describe('named slots reach the wrappers', () => {
+  const toolbar = (slots) => ({
+    ...meta,
+    tag: 'arc-toolbar',
+    className: 'ArcToolbar',
+    pascalName: 'Toolbar',
+    tier: 'application',
+    props: [{ name: 'label', type: 'String', default: "''", reflect: false, values: [], docType: '' }],
+    events: [],
+    eventDetails: {},
+    slots,
+    hasDefaultSlot: true,
+  });
+  const svelteOf = (m) => readFileSync(generateSvelte(m, config('out/sl-s'), tmpDir).path, 'utf-8');
+  const vueOf = (m) => readFileSync(generateVue(m, config('out/sl-v'), tmpDir).path, 'utf-8');
+
+  it('Svelte declares, destructures and renders a snippet per slot', () => {
+    const content = svelteOf(toolbar(['start', 'end']));
+    expect(content).toContain('start?: Snippet;');
+    expect(content).toContain('end?: Snippet;');
+    expect(content).toContain("let { label = '', start, end, children, ...rest }: Props = $props();");
+    expect(content).toContain('{@render start?.()}');
+    expect(content).toContain('{@render end?.()}');
+    expect(content).toContain('{@render children?.()}');
+  });
+
+  it('Svelte adds no carrier element, so ::slotted still matches', () => {
+    const content = svelteOf(toolbar(['start']));
+    expect(content).not.toContain('display:contents');
+    expect(content).not.toMatch(/<div slot="start"/);
+  });
+
+  it('Svelte camelCases a slot name that is not an identifier', () => {
+    const content = svelteOf(toolbar(['icon-left']));
+    expect(content).toContain('iconLeft?: Snippet;');
+    expect(content).toContain('{@render iconLeft?.()}');
+    // The real slot name is recorded for the reader, since the mapping matters.
+    expect(content).toContain('<slot name="icon-left">');
+  });
+
+  it('Svelte does not let a slot collide with a global attribute member', () => {
+    // A slot called `title` would otherwise be declared twice — once as a
+    // Snippet, once as the global string attribute — which is a hard TS error.
+    const content = svelteOf({ ...toolbar(['title']), props: [] });
+    expect(content.match(/^\s*title\?:/gm)).toHaveLength(1);
+    expect(content).toContain('title?: Snippet;');
+  });
+
+  it('Svelte does not let a slot collide with a declared prop', () => {
+    const content = svelteOf(toolbar(['label']));
+    expect(content).toContain('label?: string;');
+    expect(content).toContain('label_?: Snippet;');
+    expect(content).toContain('{@render label_?.()}');
+  });
+
+  it('Vue forwards every named slot alongside the default', () => {
+    const content = vueOf(toolbar(['start', 'end']));
+    expect(content).toContain('<slot />');
+    expect(content).toContain('<slot name="start" />');
+    expect(content).toContain('<slot name="end" />');
+  });
+
+  it('leaves a component with no named slots exactly as before', () => {
+    const plain = { ...toolbar([]), slots: [] };
+    expect(svelteOf(plain)).not.toContain('Snippet;\n    children');
+    expect(svelteOf(plain)).toContain('{@render children?.()}');
+    expect(vueOf(plain).match(/<slot/g)).toHaveLength(1);
+  });
+
+  it('tolerates a meta with no slots field at all', () => {
+    // Older callers construct ComponentMeta by hand.
+    const legacy = { ...toolbar([]) };
+    delete legacy.slots;
+    expect(() => svelteOf(legacy)).not.toThrow();
+    expect(() => vueOf(legacy)).not.toThrow();
+  });
+});

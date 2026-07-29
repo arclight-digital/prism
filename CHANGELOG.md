@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.7.0 — unreleased
+
+### Fixed
+
+- **Named-slot content was silently dropped by the Svelte wrappers.** `arc-toolbar` and `arc-status-bar` lost every `slot="start"` and `slot="end"` child: only the unslotted content survived, so transport controls, position readouts and loop-integrity pips all rendered nowhere. Build clean, typecheck clean, no warning.
+
+  Svelte routes `slot="start"` on a **component's** child to a snippet prop of that name. The generated wrapper rendered only `{@render children?.()}` and declared no such prop, so the content had nowhere to go. Used against the custom element directly it works, because Svelte doesn't intercept `slot` on a plain element — the wrapper layer was what broke it.
+
+  `ComponentMeta` now carries `slots` and `hasDefaultSlot`. Nothing recorded them before: `html.js` strips `<slot name="…">` at generation time and the parser never looked, so no generator could have known named slots existed. The Svelte wrapper declares a `Snippet` prop per named slot and renders each one; the Vue wrapper forwards `<slot name="…" />` alongside the default, closing the narrower version of the same gap (`<template #start>` was dropped there, while a `<div slot="start">` child happened to work because Vue 3 removed `slot` as syntax). React, Preact, Solid and Angular were never affected.
+
+  **No carrier element is added.** Wrapping projected content in a `display:contents` node would guarantee slot targeting but sit between the shadow slot and the content, breaking `::slotted()` rules and any layout the slot applies to its children. The trade is that the `slot` attribute must be on your own element, inside the snippet — see the README. In that position it's ordinary markup and survives regardless of how Svelte handles the attribute on a slotted child.
+
+  Slot names that aren't valid identifiers can't be snippet props, so `slot="icon-left"` is exposed as `iconLeft`, and every remapped name is reported (`slot-name-remapped`, a `--strict` failure) rather than left to be discovered — `{#snippet iconLeft()}` reaches it, `slot="icon-left"` on a direct child does not, because Svelte derives the prop name from the attribute verbatim.
+
 ## 2.6.0 — 2026-07-29
 
 ### Added

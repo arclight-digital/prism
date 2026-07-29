@@ -164,7 +164,15 @@ export function generateVue(meta, config, root) {
     lines.push(`  <${meta.tag}>`);
   }
 
+  // Forward each named slot as well as the default one. Vue only ever passed
+  // `<slot />` through, so a consumer's `<template #start>` content was dropped.
+  // As in Svelte, no carrier element is added — the `slot` attribute belongs on
+  // the consumer's own element, where Vue leaves it alone (Vue 3 removed `slot`
+  // as syntax, so it is just an attribute).
   lines.push(`    <slot />`);
+  for (const slot of meta.slots ?? []) {
+    lines.push(`    <slot name="${slot}" />`);
+  }
   lines.push(`  </${meta.tag}>`);
   lines.push('</template>');
   lines.push('');

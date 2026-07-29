@@ -65,10 +65,13 @@ const GLOBAL_ATTRS = [
  *
  * @param {import('../parser.js').PropMeta[]} props
  * @param {string} indent
+ * @param {Iterable<string>} [alsoDeclared] - other members already in the
+ *   interface, e.g. slot snippet props; a slot called `title` would otherwise
+ *   collide with the global attribute of the same name
  * @returns {string[]}
  */
-export function passthroughMembers(props, indent = '  ') {
-  const declared = new Set(props.map((p) => p.name));
+export function passthroughMembers(props, indent = '  ', alsoDeclared = []) {
+  const declared = new Set([...props.map((p) => p.name), ...alsoDeclared]);
   const lines = GLOBAL_ATTRS
     .filter(([name]) => !declared.has(name))
     .map(([name, type]) => `${indent}${name}?: ${type};`);
