@@ -6,9 +6,13 @@
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { VALID_TAG } from './parser.js';
+import { ACKNOWLEDGEABLE_CODES } from './report.js';
 
 /** The classification levels `config.interactivity` may assign. */
 const LEVELS = new Set(['static', 'hybrid', 'interactive']);
+
+/** Fields an `acknowledge` entry may carry. */
+const ACK_FIELDS = new Set(['code', 'tag', 'prop', 'note']);
 
 /**
  * Normalize config — apply defaults for optional fields so downstream
@@ -77,6 +81,50 @@ export function normalizeConfig(config) {
     }
     if (!Array.isArray(rule.exclude) || rule.exclude.some((p) => typeof p !== 'string')) {
       throw new Error(`prism: config.bindings["${tag}"].exclude must be an array of prop names`);
+    }
+  }
+
+  // Accepted findings. Some findings are correct and stay correct: `arc-column`
+  // really does declare `key`, React really does eat it, and the right fix is an
+  // alias that leaves `key` working for the five consumers it works for today.
+  // Doing that leaves the finding permanently true, so without a way to record
+  // "known, decided, not going to change", `--strict` could never pass on the
+  // repos it was built for — and by its own rationale, a check that can never
+  // pass gets deleted.
+  //
+  // Validated on the same terms as `interactivity` and `bindings`: a typo here
+  // would silence nothing while looking like it had.
+  if (config.acknowledge !== undefined && !Array.isArray(config.acknowledge)) {
+    throw new Error(
+      'prism: config.acknowledge must be an array of { code, tag?, prop?, note? } entries'
+    );
+  }
+  config.acknowledge = config.acknowledge || [];
+  for (const [i, entry] of config.acknowledge.entries()) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      throw new Error(`prism: config.acknowledge[${i}] must be an object, e.g. { code: 'framework-reserved', tag: 'arc-column', prop: 'key' }`);
+    }
+    for (const field of Object.keys(entry)) {
+      if (!ACK_FIELDS.has(field)) {
+        throw new Error(
+          `prism: config.acknowledge[${i}] has unknown field "${field}" — only ${[...ACK_FIELDS].join(', ')} are supported`
+        );
+      }
+    }
+    // `code` is required: an entry without one would accept every finding for a
+    // component, which is a mute button rather than a decision.
+    if (!ACKNOWLEDGEABLE_CODES.includes(entry.code)) {
+      throw new Error(
+        `prism: config.acknowledge[${i}].code is ${JSON.stringify(entry.code)} — must be one of ${ACKNOWLEDGEABLE_CODES.join(', ')}`
+      );
+    }
+    if (entry.tag !== undefined && !VALID_TAG.test(entry.tag)) {
+      throw new Error(`prism: config.acknowledge[${i}].tag "${entry.tag}" is not a valid custom-element tag`);
+    }
+    for (const field of ['prop', 'note']) {
+      if (entry[field] !== undefined && typeof entry[field] !== 'string') {
+        throw new Error(`prism: config.acknowledge[${i}].${field} must be a string`);
+      }
     }
   }
 

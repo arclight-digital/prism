@@ -267,7 +267,11 @@ const TRIVIAL_DOC_TYPES = new Set([
 // conservative grammar. Braces are already balanced by extraction; `;` and
 // backticks are excluded because either could end the declaration early.
 const SAFE_DOC_TYPE = /^[\w\s<>[\]{}(),.|&'"?:=>-]+$/;
-const MAX_DOC_TYPE = 200;
+// Generous rather than tight. This feature exists for the props that carry real
+// shape, and those are exactly the long ones — a three-level nested menu item is
+// legitimately ~180 characters, so the original 200 rejected the cases it was
+// built to serve. This is a sanity bound on runaway input, not a style rule.
+const MAX_DOC_TYPE = 500;
 
 // Types resolvable without an import. A documented type naming anything else
 // generates a wrapper referring to a symbol prism cannot import for it.
@@ -331,15 +335,35 @@ function applyDocTypes(props, source, warn, tag) {
     }
 
     if (TRIVIAL_DOC_TYPES.has(typeText)) continue;
-    if (typeText.length > MAX_DOC_TYPE || !SAFE_DOC_TYPE.test(typeText)) {
-      warn('unusable-doc-type', `${tag ?? 'component'} prop "${prop.name}" has a documented type prism can't emit safely; falling back to ${prop.type}`, { tag, prop: prop.name });
+
+    // Both rejections name the actual cause. "Can't emit safely" on its own
+    // sends you to the source to find out which rule you hit.
+    if (typeText.length > MAX_DOC_TYPE) {
+      warn(
+        'unusable-doc-type',
+        `${tag ?? 'component'} prop "${prop.name}" has a documented type of ${typeText.length} characters, over prism's ${MAX_DOC_TYPE}-character limit — falling back to ${prop.type}. Extract the repeated parts or shorten the shape.`,
+        { tag, prop: prop.name, reason: 'too-long', length: typeText.length, limit: MAX_DOC_TYPE }
+      );
+      continue;
+    }
+    if (!SAFE_DOC_TYPE.test(typeText)) {
+      const offending = [...new Set(typeText.split('').filter((c) => !SAFE_DOC_TYPE.test(c)))];
+      warn(
+        'unusable-doc-type',
+        `${tag ?? 'component'} prop "${prop.name}" has a documented type containing ${offending.map((c) => JSON.stringify(c)).join(', ')}, which prism won't emit into a type position — falling back to ${prop.type}.`,
+        { tag, prop: prop.name, reason: 'unsafe-characters', characters: offending }
+      );
       continue;
     }
 
     const unportable = [...new Set([...typeText.matchAll(/\b([A-Z]\w*)/g)].map((x) => x[1]))]
       .filter((n) => !PORTABLE_TYPE_NAMES.has(n));
     if (unportable.length > 0) {
-      warn('unportable-doc-type', `${tag ?? 'component'} prop "${prop.name}" documents ${unportable.map((n) => `"${n}"`).join(', ')}, which prism cannot import into the wrappers — inline the shape or the generated types won't compile`, { tag, prop: prop.name, names: unportable });
+      warn(
+        'unportable-doc-type',
+        `${tag ?? 'component'} prop "${prop.name}" documents ${unportable.map((n) => `"${n}"`).join(', ')}, which prism cannot import — generated wrappers take no imports, so inline the shape (\`Array<{id: string}>\` rather than \`${unportable[0]}[]\`) or the generated types won't compile.`,
+        { tag, prop: prop.name, names: unportable }
+      );
     }
 
     prop.docType = typeText;

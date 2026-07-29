@@ -23,6 +23,20 @@ export default {
     'arc-copy-button': { exclude: ['value'] },
   },
 
+  // Findings you've already decided about, so `--strict` can pass. Some
+  // findings are correct and stay correct — the fix was made, and the finding
+  // is still true. Waived findings are still printed under `prism: accepted:`,
+  // and an entry that matches nothing is itself a strict failure, so the list
+  // can't quietly rot. `code` is required; `tag` and `prop` narrow it.
+  acknowledge: [
+    {
+      code: 'framework-reserved',
+      tag: 'arc-column',
+      prop: 'key',
+      note: 'aliased as `field`; key still works in HTML/Vue/Svelte/Angular/Solid',
+    },
+  ],
+
   // React output
   react: {
     outDir: 'packages/react/src',

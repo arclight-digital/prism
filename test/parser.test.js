@@ -987,3 +987,54 @@ describe('documented types beyond literal unions', () => {
     expect(diagnostics).toEqual([]);
   });
 });
+
+describe('documented type rejections name their cause', () => {
+  const parse = (typeText) => {
+    const diagnostics = [];
+    const meta = parseComponent(`
+      /**
+       * @tag arc-big
+       * @prop {${typeText}} rows
+       */
+      export class ArcBig extends LitElement {
+        static properties = { rows: { type: Array } };
+      }
+    `, '/src/content/big.js', prefix, {}, diagnostics);
+    return { prop: meta.props.find((p) => p.name === 'rows'), diagnostics };
+  };
+
+  it('states the length and the limit when a type is too long', () => {
+    const long = `Array<{${Array.from({ length: 40 }, (_, i) => `field${i}: string`).join(', ')}}>`;
+    const { prop, diagnostics } = parse(long);
+    expect(prop.docType).toBe('');
+    expect(diagnostics[0]).toMatchObject({
+      code: 'unusable-doc-type', reason: 'too-long', length: long.length, limit: 500,
+    });
+    expect(diagnostics[0].message).toContain(`${long.length} characters`);
+    expect(diagnostics[0].message).toContain('500-character limit');
+  });
+
+  it('names the offending characters when a type is unsafe', () => {
+    const { prop, diagnostics } = parse('string; declare const x: number');
+    expect(prop.docType).toBe('');
+    expect(diagnostics[0]).toMatchObject({ code: 'unusable-doc-type', reason: 'unsafe-characters' });
+    expect(diagnostics[0].characters).toContain(';');
+  });
+
+  it('accepts a realistically deep nested shape', () => {
+    // ~200 chars — the shape this feature exists to serve, rejected by the
+    // original limit.
+    const nested = 'Array<{id: string, label: string, children: Array<{id: string, label: string, children: Array<{id: string, label: string, href: string, disabled: boolean}>}>}>';
+    const { prop, diagnostics } = parse(nested);
+    expect(nested.length).toBeGreaterThan(150);
+    expect(prop.docType).toBe(nested);
+    expect(diagnostics).toEqual([]);
+  });
+
+  it('tells you to inline the shape when a type names an unimportable symbol', () => {
+    const { diagnostics } = parse('ChartSeries[]');
+    expect(diagnostics[0].code).toBe('unportable-doc-type');
+    expect(diagnostics[0].message).toContain('inline the shape');
+    expect(diagnostics[0].message).toContain('generated wrappers take no imports');
+  });
+});

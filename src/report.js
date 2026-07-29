@@ -90,10 +90,75 @@ export const STRICT_CODES = [
   'framework-reserved',
   'doc-drift',
   'unmatched-override',
+  'unmatched-acknowledge',
   'invalid-tag',
   'invalid-event',
   'invalid-detail-key',
 ];
+
+/** Codes an `acknowledge` entry may name. Its own staleness isn't waivable. */
+export const ACKNOWLEDGEABLE_CODES = STRICT_CODES.filter((c) => c !== 'unmatched-acknowledge');
+
+/**
+ * True if an `acknowledge` entry covers a diagnostic.
+ *
+ * Every field the entry states must match; fields it omits are wildcards. So
+ * `{ code, tag, prop }` accepts one finding and `{ code }` accepts a class of
+ * them — blunt, but an explicit choice rather than an accident.
+ */
+function ackMatches(entry, d) {
+  if (entry.code !== d.code) return false;
+  if (entry.tag !== undefined && entry.tag !== d.tag) return false;
+  if (entry.prop !== undefined && entry.prop !== d.prop) return false;
+  return true;
+}
+
+/**
+ * Split diagnostics into the ones still demanding attention and the ones
+ * already decided, and report acknowledgements that matched nothing.
+ *
+ * Accepted findings are still returned rather than dropped: an allowlist that
+ * makes findings vanish is how a real regression hides behind an old decision.
+ * They print, quietly, under their own heading.
+ *
+ * A stale acknowledgement is itself a finding, for the same reason an unmatched
+ * `config.interactivity` key is — the entry sits in the config looking like it's
+ * doing something while the thing it described is gone.
+ *
+ * @param {import('./parser.js').Diagnostic[]} diagnostics
+ * @param {Array<{code: string, tag?: string, prop?: string, note?: string}>} acknowledge
+ * @returns {{ active: object[], accepted: object[], stale: object[] }}
+ */
+export function partitionAcknowledged(diagnostics, acknowledge = []) {
+  const used = new Set();
+  const active = [];
+  const accepted = [];
+
+  for (const d of diagnostics) {
+    const idx = acknowledge.findIndex((entry) => ackMatches(entry, d));
+    if (idx === -1) {
+      active.push(d);
+    } else {
+      used.add(idx);
+      accepted.push({ ...d, note: acknowledge[idx].note });
+    }
+  }
+
+  const stale = acknowledge
+    .map((entry, i) => ({ entry, i }))
+    .filter(({ i }) => !used.has(i))
+    .map(({ entry }) => ({
+      code: 'unmatched-acknowledge',
+      message:
+        `config.acknowledge entry for ${entry.code}` +
+        `${entry.tag ? ` on ${entry.tag}` : ''}${entry.prop ? `.${entry.prop}` : ''}` +
+        ' matched no finding — the issue is gone, or the entry no longer describes it',
+      tag: entry.tag,
+      prop: entry.prop,
+    }));
+
+  return { active, accepted, stale };
+}
 
 export function strictFailures(diagnostics) {
   const rank = new Map(STRICT_CODES.map((c, i) => [c, i]));

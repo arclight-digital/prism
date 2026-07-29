@@ -274,3 +274,53 @@ describe('normalizeConfig — binding overrides', () => {
       .toThrow(/must be an object mapping tag names to binding rules/);
   });
 });
+
+describe('config.acknowledge', () => {
+  const base = { components: 'src', tiers: ['content'] };
+
+  it('defaults to an empty list', () => {
+    expect(normalizeConfig({ ...base }).acknowledge).toEqual([]);
+  });
+
+  it('accepts a well-formed entry', () => {
+    const c = normalizeConfig({
+      ...base,
+      acknowledge: [{ code: 'framework-reserved', tag: 'arc-column', prop: 'key', note: 'aliased as field' }],
+    });
+    expect(c.acknowledge).toHaveLength(1);
+  });
+
+  it('rejects a non-array', () => {
+    expect(() => normalizeConfig({ ...base, acknowledge: {} })).toThrow(/must be an array/);
+  });
+
+  it('rejects an unknown field', () => {
+    expect(() => normalizeConfig({ ...base, acknowledge: [{ code: 'doc-drift', reason: 'x' }] }))
+      .toThrow(/unknown field "reason"/);
+  });
+
+  it('requires a known code', () => {
+    expect(() => normalizeConfig({ ...base, acknowledge: [{ tag: 'arc-column' }] }))
+      .toThrow(/must be one of/);
+    expect(() => normalizeConfig({ ...base, acknowledge: [{ code: 'nonsense' }] }))
+      .toThrow(/must be one of/);
+  });
+
+  it('refuses to waive its own staleness check', () => {
+    // Otherwise an allowlist could hide the fact that it had gone stale.
+    expect(() => normalizeConfig({ ...base, acknowledge: [{ code: 'unmatched-acknowledge' }] }))
+      .toThrow(/must be one of/);
+  });
+
+  it('validates the tag', () => {
+    expect(() => normalizeConfig({ ...base, acknowledge: [{ code: 'doc-drift', tag: 'nohyphen' }] }))
+      .toThrow(/not a valid custom-element tag/);
+  });
+
+  it('validates prop and note types', () => {
+    expect(() => normalizeConfig({ ...base, acknowledge: [{ code: 'doc-drift', prop: 3 }] }))
+      .toThrow(/\.prop must be a string/);
+    expect(() => normalizeConfig({ ...base, acknowledge: [{ code: 'doc-drift', note: true }] }))
+      .toThrow(/\.note must be a string/);
+  });
+});

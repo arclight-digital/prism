@@ -86,6 +86,9 @@ npx prism --prune
 
 # Exit 1 if anything was reported — for CI and generate scripts
 npx prism --strict
+
+# Write findings as JSON for a wrapper script to consume
+npx prism --report-json .prism-report.json
 ```
 
 All flags also have short forms: `-w` for `--watch`, `-c` for `--config`.
@@ -105,9 +108,50 @@ Prism reports what it couldn't act on, but a caller that pipes stdout and only s
 prism: --strict — 1 issue(s) reported above.
 ```
 
-It fails on: a prop name the target framework reserves, doc drift (a documented union the CSS or the component's own default contradicts), a `config.interactivity` entry matching no component, and any tag, event or detail key prism had to drop.
+It fails on: a prop name the target framework reserves, doc drift (a documented union the CSS or the component's own default contradicts), a `config.interactivity` or `config.acknowledge` entry matching nothing, and any tag, event or detail key prism had to drop.
 
 Skipped `interactive` components and the misclassification list are deliberately *not* strict failures. Both are routine on every run, and a check that can never pass gets removed. `--strict` is a no-op in watch mode.
+
+### `config.acknowledge` — findings you've already decided about
+
+Some findings are correct and stay correct. `arc-column` really does declare `key`, React really does eat it, and the recommended fix is an alias that leaves `key` working for every consumer it works for today — which means the finding remains true forever. Without a way to record that decision, `--strict` could never pass, and by its own rationale a check that can never pass gets deleted.
+
+```js
+acknowledge: [
+  {
+    code: 'framework-reserved',       // required
+    tag: 'arc-column',                // optional — omit to match every tag
+    prop: 'key',                      // optional — omit to match every prop
+    note: 'aliased as `field`; key still works in HTML/Vue/Svelte/Angular/Solid',
+  },
+],
+```
+
+Every field you state must match; fields you omit are wildcards, so `{ code }` alone waives a whole class. Malformed entries throw at config load, on the same terms as `interactivity` and `bindings`.
+
+Two deliberate properties:
+
+- **Waived findings still print**, under a `prism: accepted:` heading with your note. An allowlist that makes output disappear is how a real regression ends up sheltering behind an old decision.
+- **An entry matching nothing is itself a strict failure.** Otherwise the list rots — entries outlive the findings they describe and quietly pre-waive whatever next appears under the same key. That one code, `unmatched-acknowledge`, cannot itself be acknowledged.
+
+### `--report-json` — findings as data
+
+Every heading in the human report carries the literal prefix `prism: warning:` (or `prism: accepted:`), so it can be grepped. But the wording after that prefix is prose and does change between releases — 2.5.0's regrouping silently broke a downstream filter keyed on the word "warning". If something automated consumes prism's findings, use `--report-json <path>` instead:
+
+```json
+{
+  "version": 1,
+  "strict": true,
+  "findings": [
+    { "code": "doc-drift", "tag": "arc-chip", "prop": "variant", "message": "…", "accepted": false }
+  ],
+  "accepted": [
+    { "code": "framework-reserved", "tag": "arc-column", "prop": "key", "note": "…", "accepted": true }
+  ]
+}
+```
+
+`code` is the stable contract; `message` is for humans and will be reworded. A failure to write the report never fails the generate run.
 
 ### What the generated Props accept
 
@@ -201,6 +245,7 @@ export default {
 | `ignore` | `string[]` | `[]` | Patterns to skip — bare filenames (`index.js`), prefixed (`**/index.js`), or directory globs (`**/icons/**`) |
 | `interactivity` | `Record<string, 'static'\|'hybrid'\|'interactive'>` | `{}` | Per-tag classification overrides. Highest precedence — see [Interactivity detection](#interactivity-detection) |
 | `bindings` | `Record<string, { exclude: string[] }>` | `{}` | Per-tag opt-outs from derived two-way bindings — see [Two-way bindings](#two-way-bindings) |
+| `acknowledge` | `Array<{ code, tag?, prop?, note? }>` | `[]` | Findings you've decided about, so `--strict` can pass — see [`config.acknowledge`](#configacknowledge--findings-youve-already-decided-about) |
 
 ### Framework options
 

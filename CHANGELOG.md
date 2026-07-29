@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.6.0 — unreleased
+
+### Added
+
+- **`config.acknowledge` — findings you've already decided about.** `--strict` shipped in 2.5.0 unadoptable, and prism's own advice was the reason. For `arc-column.key` it recommends adding an alias rather than renaming, precisely so the five frameworks where `key` works today keep working. Do that and the finding stays true forever — React still eats the prop — with no way to record the decision. Following the recommendation left a permanent finding, so `--strict` could never pass, which left it useful only for repos with nothing to report: the opposite of what it was built for. Its own rationale ("a check that can never pass gets deleted") applied to itself.
+
+  An entry is `{ code, tag?, prop?, note? }`. Every field stated must match and omitted fields are wildcards, so `{ code, tag, prop }` waives one finding and `{ code }` waives a class. Malformed entries throw at config load, on the same terms as `interactivity` and `bindings`.
+
+  Two deliberate properties. Waived findings **still print**, under a `prism: accepted:` heading with the note attached — an allowlist that makes output vanish is how a real regression ends up sheltering behind an old decision. And an entry matching **nothing** is itself a strict failure, because otherwise the list rots: entries outlive the findings they describe and quietly pre-waive whatever next appears under the same key. That code, `unmatched-acknowledge`, is the one thing that can't itself be acknowledged.
+
+- **`--report-json <path>` — findings as data.** 2.5.0 moved findings into labelled groups whose headers contain no fixed keyword, which silently broke a downstream filter that had matched on the word "warning" since 2.4.0. The reserved-prop finding went unseen on the first 2.5.0 run — the exact failure the reporting work existed to prevent, reintroduced by the reporting work.
+
+  Two fixes. Every heading now carries a literal `prism: warning:` (or `prism: accepted:`) prefix, so grep has something stable to match. And for anything automated, `--report-json` writes the findings as structured data — `code` is the contract, `message` is prose and will keep being reworded. A failed report write never fails the generate run.
+
+### Fixed
+
+- **The documented-type length limit is no longer a silent, undocumented cliff.** `MAX_DOC_TYPE` was 200 characters and the rejection said only "can't emit safely", so a 209-character `menubar.items` shape degraded to `Array` with no indication that length was the cause — findable only by reading `parser.js`. The limit is now 500, since a legitimate three-level nested menu shape is ~180 and 200 was tight for exactly the props this feature exists to serve, and the diagnostic states the actual length and the limit. The unsafe-character rejection likewise names the characters it objected to, and both carry a structured `reason`.
+
+- **The unimportable-type diagnostic now says what to do.** It reported that prism couldn't import the symbol without noting that generated wrappers take no imports at all, making "inline the shape" always the answer. It now says so, with an example.
+
 ## 2.5.0 — 2026-07-29
 
 ### Fixed

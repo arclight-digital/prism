@@ -7,13 +7,14 @@
  *   prism                          # Generate all (reports stale output)
  *   prism --prune                  # Generate all, delete stale output
  *   prism --strict                 # Exit 1 if anything was reported
+ *   prism --report-json out.json   # Write findings as JSON
  *   prism --watch                  # Watch mode
  *   prism --config ./my.config.js  # Custom config
  *   prism path/to/component.js     # Single component
  */
 
-import { readFileSync, existsSync } from 'node:fs';
-import { join, resolve, relative } from 'node:path';
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { join, resolve, relative, dirname } from 'node:path';
 import { parseComponent } from './parser.js';
 import { normalizeConfig, isIgnored, discoverComponents as _discoverComponents } from './config.js';
 import { generateReact } from './generators/react.js';
@@ -28,6 +29,7 @@ import { sweepOrphans } from './generators/prune.js';
 import { reservedCollisions } from './generators/identifiers.js';
 import {
   outputSummary, misclassified, formatBytes, strictFailures, groupDiagnostics,
+  partitionAcknowledged,
 } from './report.js';
 import {
   updateWCBarrel,
@@ -60,6 +62,11 @@ let prune = false;
 // cannot observe a warning any other way, so on a normal run the entire report
 // is invisible. This is the flag that makes it observable.
 let strict = false;
+// Machine-readable findings. Grepping the human block means matching prose that
+// changes between releases — 2.5.0's regrouping silently broke a downstream
+// filter that had keyed on the word "warning". This is the contract that
+// doesn't move.
+let reportJsonPath = null;
 
 // Diagnostics collected from every parse this run. Passing a collector to
 // parseComponent suppresses its own console output, so these print once, here,
@@ -73,6 +80,8 @@ for (let i = 0; i < args.length; i++) {
     prune = true;
   } else if (args[i] === '--strict') {
     strict = true;
+  } else if (args[i] === '--report-json') {
+    reportJsonPath = args[++i];
   } else if (args[i] === '--config' || args[i] === '-c') {
     configPath = args[++i];
   } else if (args[i] && !args[i].startsWith('-')) {
@@ -416,26 +425,47 @@ function warnUnmatchedOverrides(metas, config) {
  * every run trains people to scroll past it. The count is always stated in
  * full, so a truncated list never reads as a complete one.
  */
-function flushDiagnostics() {
+function flushDiagnostics(config) {
   const LABELS = {
     'framework-reserved': 'prop names a framework reserves — silently dropped at runtime',
     'doc-drift': 'documented @prop unions contradicted by the CSS or the default',
     'unportable-doc-type': 'documented @prop types naming symbols prism cannot import',
     'unusable-doc-type': 'documented @prop types prism could not emit safely',
     'unmatched-override': 'config.interactivity entries matching no component',
+    'unmatched-acknowledge': 'config.acknowledge entries matching no finding',
     'invalid-tag': 'components skipped for an invalid tag name',
     'invalid-event': 'events dropped for an invalid name',
     'invalid-detail-key': 'detail keys dropped for an invalid name',
   };
   const SHOWN = 10;
 
-  for (const { code, entries } of groupDiagnostics(diagnostics)) {
-    console.log(`\n${entries.length} ${LABELS[code] ?? code}:`);
+  const { active, accepted, stale } = partitionAcknowledged(diagnostics, config.acknowledge);
+  const open = [...active, ...stale];
+
+  // Every heading carries the same literal prefix. The wording after it is
+  // prose and will keep changing; `prism: warning:` is the part downstream
+  // filters can rely on. `--report-json` is the sturdier answer still.
+  for (const { code, entries } of groupDiagnostics(open)) {
+    console.log(`\nprism: warning: ${entries.length} ${LABELS[code] ?? code}:`);
     for (const d of entries.slice(0, SHOWN)) console.log(`  ${d.message}`);
     if (entries.length > SHOWN) console.log(`  … and ${entries.length - SHOWN} more`);
   }
 
-  const failures = strictFailures(diagnostics);
+  // Accepted findings are stated, not hidden. An allowlist that makes output
+  // disappear is how a genuine regression ends up sheltering behind an old
+  // decision — but they're one line each, since nothing is being asked of you.
+  if (accepted.length > 0) {
+    console.log(`\nprism: accepted: ${accepted.length} known finding(s) waived by config.acknowledge:`);
+    for (const d of accepted.slice(0, SHOWN)) {
+      const where = [d.tag, d.prop].filter(Boolean).join('.');
+      console.log(`  ${d.code}${where ? ` ${where}` : ''}${d.note ? ` — ${d.note}` : ''}`);
+    }
+    if (accepted.length > SHOWN) console.log(`  … and ${accepted.length - SHOWN} more`);
+  }
+
+  writeReportJson({ active, accepted, stale });
+
+  const failures = strictFailures(open);
   // Cleared once printed: in watch mode this runs on every reconcile, and a
   // growing array would re-report the same drift on each pass.
   diagnostics.length = 0;
@@ -451,6 +481,32 @@ function flushDiagnostics() {
   // exactly the configuration this flag exists to serve.
   console.error(`\nprism: --strict — ${failures.length} issue(s) reported above.`);
   process.exitCode = 1;
+}
+
+/**
+ * Write the run's findings as JSON, if asked.
+ *
+ * The human block is prose and reworded between releases; anything parsing it
+ * is one release away from silently matching nothing. This is the stable shape:
+ * `code` is the contract, the rest is detail.
+ */
+function writeReportJson({ active, accepted, stale }) {
+  if (!reportJsonPath) return;
+  const payload = {
+    version: 1,
+    strict,
+    findings: [...active, ...stale].map((d) => ({ ...d, accepted: false })),
+    accepted: accepted.map((d) => ({ ...d, accepted: true })),
+  };
+  const out = resolve(root, reportJsonPath);
+  try {
+    mkdirSync(dirname(out), { recursive: true });
+    writeFileSync(out, `${JSON.stringify(payload, null, 2)}\n`);
+    console.log(`\nreport: ${relative(root, out)}`);
+  } catch (err) {
+    // A failed report must not take the generate run down with it.
+    console.error(`prism: could not write ${reportJsonPath}: ${err.message}`);
+  }
 }
 
 /**
@@ -472,7 +528,7 @@ async function main() {
   if (singleFile) {
     console.log(`@arclux/prism — processing ${singleFile}`);
     processFile(resolve(root, singleFile), config);
-    flushDiagnostics();
+    flushDiagnostics(config);
     console.log('Done.');
     return;
   }
@@ -498,7 +554,7 @@ async function main() {
 
     if (allMetas.length > 0) {
       warnUnmatchedOverrides(allMetas, config);
-      flushDiagnostics();
+      flushDiagnostics(config);
       reportOutput(allMetas);
       runSweep(allMetas, config);
     }
@@ -532,7 +588,7 @@ async function main() {
       }
       if (sweep) {
         warnUnmatchedOverrides(metas, config);
-        flushDiagnostics();
+        flushDiagnostics(config);
         reportOutput(metas);
         runSweep(metas, config);
       }
@@ -550,7 +606,7 @@ async function main() {
         processFile(filePath, config);
         // Flushed per change, so an edit that introduces drift says so at the
         // moment it's made rather than waiting for the next full reconcile.
-        flushDiagnostics();
+        flushDiagnostics(config);
         rebuildBundle();
       } catch (err) {
         console.error(`  error processing ${rel}: ${err.message}`);
@@ -601,7 +657,7 @@ async function main() {
 
     if (allMetas.length > 0) {
       warnUnmatchedOverrides(allMetas, config);
-      flushDiagnostics();
+      flushDiagnostics(config);
       reportOutput(allMetas);
       runSweep(allMetas, config);
     }

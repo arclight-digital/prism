@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   outputSummary, misclassified, formatBytes, strictFailures, groupDiagnostics,
+  partitionAcknowledged,
 } from '../src/report.js';
 
 /** Minimal meta factory. */
@@ -147,5 +148,75 @@ describe('groupDiagnostics', () => {
 
   it('returns nothing for a clean run', () => {
     expect(groupDiagnostics([])).toEqual([]);
+  });
+});
+
+describe('partitionAcknowledged', () => {
+  const finding = (over = {}) => ({
+    code: 'framework-reserved', tag: 'arc-column', prop: 'key', message: 'm', ...over,
+  });
+
+  it('waives a finding an entry matches on code, tag and prop', () => {
+    const { active, accepted, stale } = partitionAcknowledged(
+      [finding()],
+      [{ code: 'framework-reserved', tag: 'arc-column', prop: 'key', note: 'aliased as field' }],
+    );
+    expect(active).toEqual([]);
+    expect(stale).toEqual([]);
+    expect(accepted[0].note).toBe('aliased as field');
+  });
+
+  it('leaves a finding the entry does not describe', () => {
+    const { active, accepted } = partitionAcknowledged(
+      [finding({ prop: 'ref' })],
+      [{ code: 'framework-reserved', tag: 'arc-column', prop: 'key' }],
+    );
+    expect(active).toHaveLength(1);
+    expect(accepted).toEqual([]);
+  });
+
+  it('treats omitted fields as wildcards', () => {
+    const { accepted } = partitionAcknowledged(
+      [finding(), finding({ tag: 'arc-row', prop: 'ref' })],
+      [{ code: 'framework-reserved' }],
+    );
+    expect(accepted).toHaveLength(2);
+  });
+
+  it('never waives across codes', () => {
+    const { active } = partitionAcknowledged(
+      [finding({ code: 'doc-drift' })],
+      [{ code: 'framework-reserved', tag: 'arc-column' }],
+    );
+    expect(active).toHaveLength(1);
+  });
+
+  it('reports an entry that matched nothing', () => {
+    const { stale } = partitionAcknowledged([], [{ code: 'doc-drift', tag: 'arc-gone', prop: 'size' }]);
+    expect(stale).toHaveLength(1);
+    expect(stale[0].code).toBe('unmatched-acknowledge');
+    expect(stale[0].message).toContain('arc-gone.size');
+  });
+
+  it('does not report an entry that matched at least once', () => {
+    const { stale } = partitionAcknowledged(
+      [finding(), finding()],
+      [{ code: 'framework-reserved', tag: 'arc-column', prop: 'key' }],
+    );
+    expect(stale).toEqual([]);
+  });
+
+  it('keeps a stale entry as a strict failure', () => {
+    // Otherwise the allowlist rots: entries outlive the findings they describe
+    // and quietly pre-waive whatever reappears under the same key.
+    const { stale } = partitionAcknowledged([], [{ code: 'doc-drift' }]);
+    expect(strictFailures(stale)).toHaveLength(1);
+  });
+
+  it('is a no-op with no acknowledgements', () => {
+    const { active, accepted, stale } = partitionAcknowledged([finding()]);
+    expect(active).toHaveLength(1);
+    expect(accepted).toEqual([]);
+    expect(stale).toEqual([]);
   });
 });
