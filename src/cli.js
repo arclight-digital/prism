@@ -6,6 +6,7 @@
  * Usage:
  *   prism                          # Generate all (reports stale output)
  *   prism --prune                  # Generate all, delete stale output
+ *   prism --strict                 # Exit 1 if anything was reported
  *   prism --watch                  # Watch mode
  *   prism --config ./my.config.js  # Custom config
  *   prism path/to/component.js     # Single component
@@ -24,7 +25,9 @@ import { generatePreact } from './generators/preact.js';
 import { generateHTML } from './generators/html.js';
 import { generateCSS, generateCSSBundle } from './generators/css.js';
 import { sweepOrphans } from './generators/prune.js';
-import { outputSummary, misclassified, formatBytes } from './report.js';
+import {
+  outputSummary, misclassified, formatBytes, strictFailures, groupDiagnostics,
+} from './report.js';
 import {
   updateWCBarrel,
   updateReactTierBarrel,
@@ -51,12 +54,24 @@ let singleFile = null;
 // longer regenerate these files (that is what makes them stale), so deleting
 // them is irreversible outside version control — too destructive to be implicit.
 let prune = false;
+// Turn everything prism reports into an exit code. A caller that pipes stdout
+// and only surfaces it when a step fails — which is how prism is actually run —
+// cannot observe a warning any other way, so on a normal run the entire report
+// is invisible. This is the flag that makes it observable.
+let strict = false;
+
+// Diagnostics collected from every parse this run. Passing a collector to
+// parseComponent suppresses its own console output, so these print once, here,
+// grouped, instead of interleaved through hundreds of per-component lines.
+const diagnostics = [];
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--watch' || args[i] === '-w') {
     watchMode = true;
   } else if (args[i] === '--prune') {
     prune = true;
+  } else if (args[i] === '--strict') {
+    strict = true;
   } else if (args[i] === '--config' || args[i] === '-c') {
     configPath = args[++i];
   } else if (args[i] && !args[i].startsWith('-')) {
@@ -108,7 +123,7 @@ function discoverComponents(config) {
 // ── Process a single component file ─────────────────────────
 function processFile(filePath, config) {
   const source = readFileSync(filePath, 'utf-8');
-  const meta = parseComponent(source, filePath, config.prefix, config.interactivity);
+  const meta = parseComponent(source, filePath, config.prefix, config.interactivity, diagnostics);
 
   if (!meta) {
     console.log(`  skip: ${relative(root, filePath)} (no component found)`);
@@ -358,9 +373,55 @@ function warnUnmatchedOverrides(metas, config) {
   const seen = new Set(metas.map((m) => m.tag));
   for (const tag of Object.keys(config.interactivity)) {
     if (!seen.has(tag)) {
-      console.warn(`prism: config.interactivity has "${tag}" but no such component was found`);
+      diagnostics.push({
+        code: 'unmatched-override',
+        message: `config.interactivity has "${tag}" but no such component was found`,
+        tag,
+      });
     }
   }
+}
+
+/**
+ * Print everything the parse turned up, grouped and capped, and set the exit
+ * code under --strict.
+ *
+ * Capped for the same reason the misclassification list is: a wall of lines on
+ * every run trains people to scroll past it. The count is always stated in
+ * full, so a truncated list never reads as a complete one.
+ */
+function flushDiagnostics() {
+  const LABELS = {
+    'doc-drift': 'CSS styles a variant value the documented @prop union omits',
+    'unmatched-override': 'config.interactivity entries matching no component',
+    'invalid-tag': 'components skipped for an invalid tag name',
+    'invalid-event': 'events dropped for an invalid name',
+    'invalid-detail-key': 'detail keys dropped for an invalid name',
+  };
+  const SHOWN = 10;
+
+  for (const { code, entries } of groupDiagnostics(diagnostics)) {
+    console.log(`\n${entries.length} ${LABELS[code] ?? code}:`);
+    for (const d of entries.slice(0, SHOWN)) console.log(`  ${d.message}`);
+    if (entries.length > SHOWN) console.log(`  … and ${entries.length - SHOWN} more`);
+  }
+
+  const failures = strictFailures(diagnostics);
+  // Cleared once printed: in watch mode this runs on every reconcile, and a
+  // growing array would re-report the same drift on each pass.
+  diagnostics.length = 0;
+  if (failures.length === 0) return;
+
+  // Exiting a long-running watcher on a warning would be hostile, and an exit
+  // code nothing reads is not a signal — so --strict is a no-op in watch mode.
+  if (!strict || watchMode) {
+    if (!strict) console.log('\nRun with --strict to fail the build on the above.');
+    return;
+  }
+  // Not process.exit() — that can truncate buffered stdout on a pipe, which is
+  // exactly the configuration this flag exists to serve.
+  console.error(`\nprism: --strict — ${failures.length} issue(s) reported above.`);
+  process.exitCode = 1;
 }
 
 /**
@@ -382,6 +443,7 @@ async function main() {
   if (singleFile) {
     console.log(`@arclux/prism — processing ${singleFile}`);
     processFile(resolve(root, singleFile), config);
+    flushDiagnostics();
     console.log('Done.');
     return;
   }
@@ -407,6 +469,7 @@ async function main() {
 
     if (allMetas.length > 0) {
       warnUnmatchedOverrides(allMetas, config);
+      flushDiagnostics();
       reportOutput(allMetas);
       runSweep(allMetas, config);
     }
@@ -424,8 +487,12 @@ async function main() {
     // orphaned output — the only point in watch mode with a complete meta set.
     const rebuildBundle = ({ sweep = false } = {}) => {
       const currentFiles = discoverComponents(config);
+      // These re-parses are incidental — they exist to rebuild the bundle, and
+      // their diagnostics duplicate what the changed file already reported. They
+      // go to a throwaway collector unless this is the full reconcile.
+      const sink = sweep ? diagnostics : [];
       const metas = currentFiles
-        .map((f) => parseComponent(readFileSync(f, 'utf-8'), f, config.prefix, config.interactivity))
+        .map((f) => parseComponent(readFileSync(f, 'utf-8'), f, config.prefix, config.interactivity, sink))
         .filter(Boolean);
       if (metas.length === 0) return;
       if (config.css) {
@@ -436,6 +503,7 @@ async function main() {
       }
       if (sweep) {
         warnUnmatchedOverrides(metas, config);
+        flushDiagnostics();
         reportOutput(metas);
         runSweep(metas, config);
       }
@@ -451,6 +519,9 @@ async function main() {
       console.log(`\n${label}: ${rel}`);
       try {
         processFile(filePath, config);
+        // Flushed per change, so an edit that introduces drift says so at the
+        // moment it's made rather than waiting for the next full reconcile.
+        flushDiagnostics();
         rebuildBundle();
       } catch (err) {
         console.error(`  error processing ${rel}: ${err.message}`);
@@ -501,6 +572,7 @@ async function main() {
 
     if (allMetas.length > 0) {
       warnUnmatchedOverrides(allMetas, config);
+      flushDiagnostics();
       reportOutput(allMetas);
       runSweep(allMetas, config);
     }

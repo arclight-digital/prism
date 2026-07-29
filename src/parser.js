@@ -45,14 +45,39 @@ const VALID_EVENT = /^[a-z][\w-]*$/i;
 const VALID_DETAIL_KEY = /^[a-z_][\w]*$/i;
 
 /**
+ * @typedef {Object} Diagnostic
+ * @property {string} code - machine-readable kind, e.g. 'doc-drift'
+ * @property {string} message - one-line human-readable form
+ * @property {string} [file] - source file the diagnostic came from
+ * @property {string} [tag] - component tag, where one is known
+ */
+
+/**
+ * Build the parser's warning sink.
+ *
+ * With a collector the caller owns presentation — nothing is printed, because
+ * the CLI aggregates these into one end-of-run block and uses them to decide
+ * the exit code. Without one, warnings print as before, so a library consumer
+ * calling parseComponent directly still sees them.
+ */
+function makeWarn(diagnostics, filePath) {
+  return (code, message, extra = {}) => {
+    if (diagnostics) diagnostics.push({ code, message, file: filePath, ...extra });
+    else console.warn(`prism: ${message}`);
+  };
+}
+
+/**
  * Parse a Lit component source file into ComponentMeta.
  * @param {string} source - file contents
  * @param {string} filePath - path to the file (used to extract tier)
  * @param {string} [prefix='arc'] - component tag prefix (e.g. 'arc' for arc-button)
  * @param {Record<string, string>} [overrides={}] - config.interactivity, tag → level
+ * @param {Diagnostic[]} [diagnostics] - collector; suppresses console output
  * @returns {ComponentMeta|null}
  */
-export function parseComponent(source, filePath, prefix = 'arc', overrides = {}) {
+export function parseComponent(source, filePath, prefix = 'arc', overrides = {}, diagnostics = null) {
+  const warn = makeWarn(diagnostics, filePath);
   // Extract tag name from @tag JSDoc, falling back to customElements.define
   const tagDocMatch = source.match(/@tag\s+([a-z][\w-]*)/);
   const defineMatch = source.match(/customElements\.define\(\s*['"]([^'"]+)['"]\s*,\s*(\w+)\s*\)/);
@@ -68,7 +93,7 @@ export function parseComponent(source, filePath, prefix = 'arc', overrides = {})
   // untrusted component source could otherwise smuggle injection payloads
   // through `tag`.
   if (!VALID_TAG.test(tag)) {
-    console.warn(`prism: skipping component with invalid tag name "${tag}" in ${filePath}`);
+    warn('invalid-tag', `skipping component with invalid tag name "${tag}" in ${filePath}`);
     return null;
   }
 
@@ -93,7 +118,7 @@ export function parseComponent(source, filePath, prefix = 'arc', overrides = {})
   // Read documented unions first — they are authored intent, and the CSS pass
   // below is only a fallback for props with no `@prop` union to go on.
   applyDocTypes(props, source);
-  detectEnumValues(props, css, tag);
+  detectEnumValues(props, css, tag, warn);
 
   // Parse template from render(). Defaults are needed to pick the branch of a
   // conditionally-built element, so this must run after applyDefaults above.
@@ -101,7 +126,7 @@ export function parseComponent(source, filePath, prefix = 'arc', overrides = {})
   const template = extractTemplate(source, propDefaults);
 
   // Parse custom events from dispatchEvent calls
-  const { events, eventDetails } = extractEvents(source);
+  const { events, eventDetails } = extractEvents(source, warn, tag);
 
   // Detect interactivity level
   const classification = classify(source, events, tag, overrides);
@@ -275,8 +300,9 @@ function extractCSS(source) {
  * @param {PropMeta[]} props
  * @param {string} css
  * @param {string} [tag] - component tag, for drift warnings
+ * @param {(code: string, message: string, extra?: object) => void} warn
  */
-function detectEnumValues(props, css, tag) {
+function detectEnumValues(props, css, tag, warn) {
   for (const prop of props) {
     if (prop.type !== 'String') continue;
 
@@ -295,9 +321,11 @@ function detectEnumValues(props, css, tag) {
       const documented = new Set(prop.values);
       const undocumented = [...values].filter((v) => !documented.has(v));
       if (undocumented.length > 0) {
-        console.warn(
-          `prism: ${tag ?? 'component'} styles ${prop.name} value(s) ` +
-          `${undocumented.map((v) => `"${v}"`).join(', ')} that its documented union omits`
+        warn(
+          'doc-drift',
+          `${tag ?? 'component'} styles ${prop.name} value(s) ` +
+          `${undocumented.map((v) => `"${v}"`).join(', ')} that its documented union omits`,
+          { tag, prop: prop.name, values: undocumented }
         );
       }
       continue;   // documented union wins
@@ -751,9 +779,12 @@ function extractHostDisplay(css) {
  * The detail keys are what let wrappers derive two-way bindings: an event whose
  * detail carries a key matching a declared prop is that prop's write-back path.
  *
+ * @param {string} source
+ * @param {(code: string, message: string, extra?: object) => void} warn
+ * @param {string} [tag]
  * @returns {{ events: string[], eventDetails: Record<string, string[]> }}
  */
-function extractEvents(source) {
+function extractEvents(source, warn, tag) {
   const events = new Set();
   const eventDetails = {};
   const eventPattern = /dispatchEvent\(\s*new\s+CustomEvent\(\s*['"]([^'"]+)['"]/g;
@@ -764,7 +795,7 @@ function extractEvents(source) {
     // interpolated unescaped (including as an unquoted object key) into the
     // generated wrappers, allowing code injection from an untrusted source.
     if (!VALID_EVENT.test(name)) {
-      console.warn(`prism: ignoring event with invalid name "${name}"`);
+      warn('invalid-event', `ignoring event with invalid name "${name}"`, { tag });
       continue;
     }
     events.add(name);
@@ -772,7 +803,7 @@ function extractEvents(source) {
     // A component may dispatch the same event from several code paths with
     // different payloads (a clear button sending `{ value: '' }`, the input
     // handler sending `{ value, valid }`); union the keys across all of them.
-    const keys = extractDetailKeys(source, eventPattern.lastIndex);
+    const keys = extractDetailKeys(source, eventPattern.lastIndex, warn, tag);
     if (keys.length === 0) continue;
     const seen = eventDetails[name] ?? (eventDetails[name] = []);
     for (const key of keys) {
@@ -792,9 +823,11 @@ function extractEvents(source) {
  *
  * @param {string} source
  * @param {number} afterName - index just past the closing quote of the name
+ * @param {(code: string, message: string, extra?: object) => void} warn
+ * @param {string} [tag]
  * @returns {string[]}
  */
-function extractDetailKeys(source, afterName) {
+function extractDetailKeys(source, afterName, warn, tag) {
   let i = afterName;
   while (i < source.length && /\s/.test(source[i])) i++;
   if (source[i] !== ',') return [];   // `new CustomEvent('x')` — no options
@@ -809,7 +842,7 @@ function extractDetailKeys(source, afterName) {
   const body = extractBalanced(options, detail.index + detail[0].length);
   return extractObjectKeys(body).filter((key) => {
     if (VALID_DETAIL_KEY.test(key)) return true;
-    console.warn(`prism: ignoring detail key with invalid name "${key}"`);
+    warn('invalid-detail-key', `ignoring detail key with invalid name "${key}"`, { tag });
     return false;
   });
 }

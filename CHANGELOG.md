@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.5.0 — unreleased
+
+### Added
+
+- **`--strict` — turn the report into an exit code.** Prism's reporting was architecturally invisible to its main consumer: arc-ui's `generate.js` pipes prism's stdout and discards it unless a step fails, so nothing prism printed on a successful run ever reached anyone. That covers the whole of 2.2.0's reporting feature — the component-skip summary and the misclassification list — plus unmatched-override and invalid-name warnings, and the doc-drift warning added in 2.4.0. All of it went to `/dev/null`.
+
+  `--strict` exits 1 when prism reported something it couldn't act on: doc drift, a `config.interactivity` entry matching no component, or a tag/event/detail key it had to drop. That is the only channel a caller which discards stdout on success can observe, and it needs no change to the calling script. Without the flag, behaviour is unchanged apart from a closing line pointing at it.
+
+  Skipped `interactive` components and the misclassification list are deliberately not strict failures — both are routine on every run, and a check that can never pass gets deleted. `--strict` is a no-op in watch mode, where exiting on a warning would kill the watcher and an exit code nothing reads isn't a signal.
+
+### Changed
+
+- **Parser warnings are collected rather than printed.** `parseComponent` takes an optional fifth argument, a diagnostics array. When one is passed the parser stays silent and pushes structured `{ code, message, file, tag, … }` entries instead, so the CLI can group them into one labelled end-of-run block — capped at 10 per kind, with the full count always stated — rather than interleaving them through hundreds of per-component lines. Called without a collector the parser prints exactly as before, so a library consumer sees no change.
+
+  This moves 2.4.0's doc-drift warning off `console.warn`, which was the wrong channel for it given how prism is actually run.
+
 ## 2.4.0 — 2026-07-29
 
 ### Fixed — reserved words in binding position

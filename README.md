@@ -83,9 +83,25 @@ npx prism --config ./custom.config.js
 
 # Delete generated output that no longer has a source component
 npx prism --prune
+
+# Exit 1 if anything was reported — for CI and generate scripts
+npx prism --strict
 ```
 
 All flags also have short forms: `-w` for `--watch`, `-c` for `--config`.
+
+### `--strict`
+
+Prism reports what it couldn't act on — doc drift, a `config.interactivity` entry matching no component, a name it had to drop — but a caller that pipes stdout and only surfaces it when a step fails can't observe any of it. `--strict` turns those reports into an exit code, which is the one signal such a caller does read:
+
+```
+1 CSS styles a variant value the documented @prop union omits:
+  arc-chip styles variant value(s) "ghost" that its documented union omits
+
+prism: --strict — 1 issue(s) reported above.
+```
+
+Skipped `interactive` components and the misclassification list are deliberately *not* strict failures. Both are routine on every run, and a check that can never pass gets removed. `--strict` is a no-op in watch mode.
 
 ## Configuration
 

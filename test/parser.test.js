@@ -762,3 +762,105 @@ describe('documented enum unions (@prop)', () => {
       .toEqual(['primary', 'secondary']);
   });
 });
+
+describe('diagnostics collector', () => {
+  /** Run a parse with a collector, asserting nothing was printed. */
+  const collect = (source, path = '/src/content/x.js') => {
+    const diagnostics = [];
+    const printed = [];
+    const original = console.warn;
+    console.warn = (msg) => printed.push(msg);
+    let meta;
+    try {
+      meta = parseComponent(source, path, prefix, {}, diagnostics);
+    } finally {
+      console.warn = original;
+    }
+    // A collector means the caller owns presentation — nothing goes to stdout,
+    // or the CLI's grouped block would double-report every entry.
+    expect(printed).toEqual([]);
+    return { meta, diagnostics };
+  };
+
+  it('collects doc drift instead of printing it', () => {
+    const { meta, diagnostics } = collect(`
+      /**
+       * @tag arc-chip
+       * @prop {'solid' | 'outline'} variant
+       */
+      export class ArcChip extends LitElement {
+        static properties = { variant: { type: String } };
+        static styles = css\`
+          :host([variant="ghost"]) { border: none; }
+        \`;
+      }
+    `);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      code: 'doc-drift',
+      tag: 'arc-chip',
+      prop: 'variant',
+      values: ['ghost'],
+    });
+    // The union still wins — a diagnostic is not a rejection.
+    expect(meta.props.find((p) => p.name === 'variant').values).toEqual(['solid', 'outline']);
+  });
+
+  it('collects an invalid tag name, and still returns null', () => {
+    const { meta, diagnostics } = collect(`
+      export class Bad extends LitElement {}
+      customElements.define('nohyphen', Bad);
+    `);
+    expect(meta).toBeNull();
+    expect(diagnostics[0]).toMatchObject({ code: 'invalid-tag' });
+    expect(diagnostics[0].file).toBe('/src/content/x.js');
+  });
+
+  it('collects invalid event and detail-key names', () => {
+    const { meta, diagnostics } = collect(`
+      /** @tag arc-thing */
+      export class ArcThing extends LitElement {
+        _fire() {
+          this.dispatchEvent(new CustomEvent('bad name', { detail: { ok: 1 } }));
+          this.dispatchEvent(new CustomEvent('arc-ok', { detail: { $weird: 1, fine: 2 } }));
+        }
+      }
+    `);
+    const codes = diagnostics.map((d) => d.code);
+    expect(codes).toContain('invalid-event');
+    expect(codes).toContain('invalid-detail-key');
+    expect(meta.events).toEqual(['arc-ok']);
+    expect(meta.eventDetails['arc-ok']).toEqual(['fine']);
+  });
+
+  it('stays silent on a clean component', () => {
+    const { diagnostics } = collect(`
+      /** @tag arc-clean */
+      export class ArcClean extends LitElement {
+        static properties = { label: { type: String } };
+      }
+    `);
+    expect(diagnostics).toEqual([]);
+  });
+
+  it('still prints when no collector is passed', () => {
+    const printed = [];
+    const original = console.warn;
+    console.warn = (msg) => printed.push(msg);
+    try {
+      parseComponent(`
+        /**
+         * @tag arc-chip
+         * @prop {'solid'} variant
+         */
+        export class ArcChip extends LitElement {
+          static properties = { variant: { type: String } };
+          static styles = css\`:host([variant="ghost"]) { border: none; }\`;
+        }
+      `, '/src/content/chip.js', prefix);
+    } finally {
+      console.warn = original;
+    }
+    expect(printed.join('\n')).toContain('"ghost"');
+  });
+});

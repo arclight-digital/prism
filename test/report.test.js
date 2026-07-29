@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { outputSummary, misclassified, formatBytes } from '../src/report.js';
+import {
+  outputSummary, misclassified, formatBytes, strictFailures, groupDiagnostics,
+} from '../src/report.js';
 
 /** Minimal meta factory. */
 const meta = (tag, interactivity, cssLen, classification) => ({
@@ -94,5 +96,56 @@ describe('formatBytes', () => {
   it('uses bytes below 1 KB and KB above', () => {
     expect(formatBytes(512)).toBe('512 B');
     expect(formatBytes(2048)).toBe('2 KB');
+  });
+});
+
+describe('strictFailures', () => {
+  const d = (code, message = code) => ({ code, message });
+
+  it('returns the diagnostics that should fail a --strict run', () => {
+    const out = strictFailures([
+      d('doc-drift'),
+      d('unmatched-override'),
+      d('invalid-tag'),
+      d('invalid-event'),
+      d('invalid-detail-key'),
+    ]);
+    expect(out).toHaveLength(5);
+  });
+
+  it('ignores codes outside the strict set', () => {
+    expect(strictFailures([d('some-future-note'), d('another')])).toEqual([]);
+  });
+
+  it('is empty for a clean run', () => {
+    expect(strictFailures([])).toEqual([]);
+  });
+
+  it('orders by severity rather than discovery order', () => {
+    const out = strictFailures([d('invalid-event'), d('doc-drift'), d('unmatched-override')]);
+    expect(out.map((x) => x.code)).toEqual(['doc-drift', 'unmatched-override', 'invalid-event']);
+  });
+});
+
+describe('groupDiagnostics', () => {
+  const d = (code, message = code) => ({ code, message });
+
+  it('groups by code in strict-set order', () => {
+    const out = groupDiagnostics([
+      d('invalid-event', 'a'),
+      d('doc-drift', 'b'),
+      d('invalid-event', 'c'),
+    ]);
+    expect(out.map((g) => g.code)).toEqual(['doc-drift', 'invalid-event']);
+    expect(out[1].entries.map((e) => e.message)).toEqual(['a', 'c']);
+  });
+
+  it('keeps unknown codes rather than dropping them', () => {
+    const out = groupDiagnostics([d('mystery'), d('doc-drift')]);
+    expect(out.map((g) => g.code)).toEqual(['doc-drift', 'mystery']);
+  });
+
+  it('returns nothing for a clean run', () => {
+    expect(groupDiagnostics([])).toEqual([]);
   });
 });
