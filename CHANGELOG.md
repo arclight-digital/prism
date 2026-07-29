@@ -2,7 +2,25 @@
 
 ## 2.5.0 — unreleased
 
+### Fixed
+
+- **The CSS enum fallback omitted the default too.** 2.4.0 fixed this for documented unions but left the same defect live on the fallback path, because it is the same CSS scan: the default member is the unqualified base style and so has no `:host([x="…"])` rule to be inferred from. `tag`, `checkbox`, `select` and `toggle` all default `size` to `md` and were typed `'sm' | 'lg'`, along with `radio-group.size`, `container.padding`, `diff.mode`, `footer.align`, `link.underline` and `sidebar.position` — 10 props whose default value did not type-check against their own component.
+
+  Prism already had what it needed: `applyDefaults` reads the default from the constructor. When the CSS scan finds values and the default is a non-empty string literal that isn't among them, it is unioned in. A prop's own default is by construction a legal value, so this cannot be wrong, and it's appended rather than prepended so a prop whose default the CSS already styles is unchanged. Computed and empty-string defaults are ignored, and a default alone never invents a union — one legal value is not an enum.
+
+  The same comparison now runs against documented unions: a union that omits the component's own default is reported as drift.
+
+- **Props whose name a framework reserves are now reported.** `arc-column` declares `key`. That is not a JavaScript keyword, so 2.4.0's fix doesn't apply — but React and Preact intercept `key` in the reconciler, so `<Column key="name" label="Name" />` sets the list key and the component never receives the prop. No syntax error, no type error, no warning: the column just renders nothing. And `key=` is exactly what a developer writes by reflex on a component that renders in a list, which makes the collision close to certain rather than hypothetical.
+
+  Prism cannot fix this in the wrapper — the value is taken before the component function is called — so the only remedy is renaming the prop at source, and prism now says so. Checked per framework and only for frameworks actually being generated: `key`, `ref`, `children`, `className` and `dangerouslySetInnerHTML` for React, the same minus `className` for Preact, and `children` for Svelte and Solid, whose generators inject their own. Vue and Angular reserve nothing. It's a `--strict` failure.
+
 ### Added
+
+- **Documented `@prop` types are honoured beyond string-literal unions.** Lit's `static properties` can only say `Array`, which every generator rendered as `unknown[]` — and the props carrying real shape (chart series, calendar events, table rows) are exactly the ones a consumer most needs typed. A documented `@prop {Array<{label: string, data: number[]}>} series` is now emitted verbatim in all six wrappers.
+
+  The JSDoc type is read with brace matching rather than a regex, because `{Array<{label: string}>}` ends at its *matching* brace and `[^}]+` would truncate it to `Array<{label: string` — emitting a type that doesn't parse. Types the existing map already covers exactly (`string`, `number`, `Array`, …) are left alone, so `@prop {string} label` still behaves as it did and doesn't suppress CSS enum inference. Anything prism can't emit safely is refused with a diagnostic rather than pasted in.
+
+  One limit worth knowing: prism has no way to add imports to a generated wrapper, so a documented type must be self-contained. `@prop {ChartSeries[]} series` is emitted as written and then fails to compile — prism now warns at generate time instead of leaving you to find it in `tsc`.
 
 - **`--strict` — turn the report into an exit code.** Prism's reporting was architecturally invisible to its main consumer: arc-ui's `generate.js` pipes prism's stdout and discards it unless a step fails, so nothing prism printed on a successful run ever reached anyone. That covers the whole of 2.2.0's reporting feature — the component-skip summary and the misclassification list — plus unmatched-override and invalid-name warnings, and the doc-drift warning added in 2.4.0. All of it went to `/dev/null`.
 
@@ -11,6 +29,8 @@
   Skipped `interactive` components and the misclassification list are deliberately not strict failures — both are routine on every run, and a check that can never pass gets deleted. `--strict` is a no-op in watch mode, where exiting on a warning would kill the watcher and an exit code nothing reads isn't a signal.
 
 ### Changed
+
+- **The six generators share one `tsType`.** It existed as six byte-identical copies, so a change to how props are typed had to be made six times to take effect once. Now `src/generators/types.js`, which is also what makes the documented-type support above a single edit rather than six.
 
 - **Parser warnings are collected rather than printed.** `parseComponent` takes an optional fifth argument, a diagnostics array. When one is passed the parser stays silent and pushes structured `{ code, message, file, tag, … }` entries instead, so the CLI can group them into one labelled end-of-run block — capped at 10 per kind, with the full count always stated — rather than interleaving them through hundreds of per-component lines. Called without a collector the parser prints exactly as before, so a library consumer sees no change.
 

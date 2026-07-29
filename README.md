@@ -54,7 +54,7 @@ Prism generates:
 | **CSS** | Shadow DOM CSS transformed to light DOM (`:host` &rarr; `.arc-button`, scoped inner selectors) |
 | **CSS bundle** | All components combined into a single `arc-ui.css` with design tokens |
 
-Enum values come from a documented `@prop {'primary' | 'secondary'} variant` union when there is one, and are otherwise auto-detected from `:host([variant="value"])` patterns in the CSS. Props, defaults, types, events, and interactivity level are all extracted automatically.
+Enum values come from a documented `@prop {'primary' | 'secondary'} variant` union when there is one, and are otherwise auto-detected from `:host([variant="value"])` patterns in the CSS plus the prop's own default. A documented `@prop` type that isn't a union is used verbatim, so a `series` prop can be `Array<{label: string, data: number[]}>` rather than `unknown[]`. Props, defaults, types, events, and interactivity level are all extracted automatically.
 
 Custom events (`dispatchEvent(new CustomEvent('arc-change'))`) become typed handler props in every wrapper — `onArcChange` in React/Solid/Preact, a wired `defineEmits` listener in Vue, and an `@Output()` in Angular — so a consumer's handler actually fires. (Preact binds via a ref effect, since its `on*` convention can't target hyphenated event names.)
 
@@ -92,16 +92,24 @@ All flags also have short forms: `-w` for `--watch`, `-c` for `--config`.
 
 ### `--strict`
 
-Prism reports what it couldn't act on — doc drift, a `config.interactivity` entry matching no component, a name it had to drop — but a caller that pipes stdout and only surfaces it when a step fails can't observe any of it. `--strict` turns those reports into an exit code, which is the one signal such a caller does read:
+Prism reports what it couldn't act on, but a caller that pipes stdout and only surfaces it when a step fails can't observe any of it. `--strict` turns those reports into an exit code, which is the one signal such a caller does read:
 
 ```
-1 CSS styles a variant value the documented @prop union omits:
-  arc-chip styles variant value(s) "ghost" that its documented union omits
+1 prop names a framework reserves — silently dropped at runtime:
+  arc-column prop "key" is reserved by react — it is intercepted before the
+  component sees it, so the prop silently does nothing. Rename it on the
+  component; prism cannot work around it.
 
 prism: --strict — 1 issue(s) reported above.
 ```
 
+It fails on: a prop name the target framework reserves, doc drift (a documented union the CSS or the component's own default contradicts), a `config.interactivity` entry matching no component, and any tag, event or detail key prism had to drop.
+
 Skipped `interactive` components and the misclassification list are deliberately *not* strict failures. Both are routine on every run, and a check that can never pass gets removed. `--strict` is a no-op in watch mode.
+
+### Prop names your framework reserves
+
+Some prop names are legal everywhere but never reach the component. React and Preact take `key` and `ref` in the reconciler, so `<Column key="name" />` sets the list key and the prop is silently dropped — no error, no warning, and `key=` is exactly what you write by reflex on something that renders in a list. Prism can't fix this in the wrapper (the value is taken before the component function is called), so it reports the collision and you rename the prop on the component. Checked per framework, and only for frameworks you actually generate.
 
 ## Configuration
 
@@ -210,11 +218,12 @@ Prism uses regex-based parsing (no AST library) to extract metadata from Lit sou
 2. **Properties** from `static properties = { ... }`, `static get properties() { ... }`, or `@property()` decorators — extracts name, type, and reflect. Internal `{ state: true }` / `@state()` members are excluded from the public surface.
 3. **Defaults** from `constructor() { this.variant = 'primary'; }` — assignments after nested blocks (`if`/`for`/`try`) are handled.
 4. **CSS** from `` css`...` `` template literals
-5. **Enum values** from a `@prop {'a' | 'b'} name` JSDoc union, falling back to `:host([prop="value"])` patterns in the CSS. The documented union wins because CSS can only see what CSS styles: the default member usually has no attribute selector to be inferred from, and a variant driven from JS leaves no selector at all. Where both exist, a styled value the union omits is reported as doc drift.
-6. **Template** from `render() { return html`...`; }` — supports variable inlining when templates are built from multiple `html`` ` blocks
-7. **Events** from `dispatchEvent(new CustomEvent('name'))` calls — including the top-level keys of each event's `detail` object, which is what [two-way bindings](#two-way-bindings) are derived from
-8. **Host display** from `:host { display: ... }` — determines whether HTML output uses `<div>` or `<span>` wrapper
-9. **Interactivity level** — see below
+5. **Enum values** from a `@prop {'a' | 'b'} name` JSDoc union, falling back to `:host([prop="value"])` patterns in the CSS *plus the prop's own default*. The documented union wins because CSS can only see what CSS styles: the default member usually has no attribute selector to be inferred from (it's the unqualified base style), and a variant driven from JS leaves no selector at all. On the fallback path the constructor default supplies the missing member — it is by construction a legal value. Where both sources exist, a styled value or a default the union omits is reported as doc drift.
+6. **Prop types** from a non-union `@prop {…} name` JSDoc tag, emitted verbatim — `@prop {Array<{label: string, data: number[]}>} series` types the wrapper properly instead of degrading to `unknown[]`, which is all `static properties = { series: { type: Array } }` can say. The type must be self-contained: prism cannot add imports to a generated wrapper, so a documented type naming your own exported type is reported rather than silently emitted.
+7. **Template** from `render() { return html`...`; }` — supports variable inlining when templates are built from multiple `html`` ` blocks
+8. **Events** from `dispatchEvent(new CustomEvent('name'))` calls — including the top-level keys of each event's `detail` object, which is what [two-way bindings](#two-way-bindings) are derived from
+9. **Host display** from `:host { display: ... }` — determines whether HTML output uses `<div>` or `<span>` wrapper
+10. **Interactivity level** — see below
 
 ## Two-way bindings
 

@@ -25,6 +25,7 @@ import { generatePreact } from './generators/preact.js';
 import { generateHTML } from './generators/html.js';
 import { generateCSS, generateCSSBundle } from './generators/css.js';
 import { sweepOrphans } from './generators/prune.js';
+import { reservedCollisions } from './generators/identifiers.js';
 import {
   outputSummary, misclassified, formatBytes, strictFailures, groupDiagnostics,
 } from './report.js';
@@ -128,6 +129,23 @@ function processFile(filePath, config) {
   if (!meta) {
     console.log(`  skip: ${relative(root, filePath)} (no component found)`);
     return null;
+  }
+
+  // Only frameworks actually being generated are checked — a React collision
+  // isn't a finding for a project that doesn't emit React wrappers.
+  const enabled = ['react', 'vue', 'svelte', 'angular', 'solid', 'preact'].filter((f) => config[f]);
+  for (const { prop, frameworks } of reservedCollisions(meta.props, enabled)) {
+    diagnostics.push({
+      code: 'framework-reserved',
+      message:
+        `${meta.tag} prop "${prop}" is reserved by ${frameworks.join(', ')} — ` +
+        'it is intercepted before the component sees it, so the prop silently ' +
+        'does nothing. Rename it on the component; prism cannot work around it.',
+      file: filePath,
+      tag: meta.tag,
+      prop,
+      frameworks,
+    });
   }
 
   const componentsDir = join(root, config.components);
@@ -392,7 +410,10 @@ function warnUnmatchedOverrides(metas, config) {
  */
 function flushDiagnostics() {
   const LABELS = {
-    'doc-drift': 'CSS styles a variant value the documented @prop union omits',
+    'framework-reserved': 'prop names a framework reserves — silently dropped at runtime',
+    'doc-drift': 'documented @prop unions contradicted by the CSS or the default',
+    'unportable-doc-type': 'documented @prop types naming symbols prism cannot import',
+    'unusable-doc-type': 'documented @prop types prism could not emit safely',
     'unmatched-override': 'config.interactivity entries matching no component',
     'invalid-tag': 'components skipped for an invalid tag name',
     'invalid-event': 'events dropped for an invalid name',

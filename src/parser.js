@@ -11,6 +11,9 @@
  * @property {boolean} reflect
  * @property {string[]} values - enum values, from the `@prop` JSDoc union if one
  *   is documented, otherwise inferred from CSS `:host([prop="value"])` patterns
+ *   plus the prop's own default
+ * @property {string} docType - verbatim TS type from a non-union `@prop` JSDoc
+ *   tag, e.g. `Array<{label: string}>`; empty when nothing usable was documented
  */
 
 /**
@@ -117,7 +120,7 @@ export function parseComponent(source, filePath, prefix = 'arc', overrides = {},
 
   // Read documented unions first — they are authored intent, and the CSS pass
   // below is only a fallback for props with no `@prop` union to go on.
-  applyDocTypes(props, source);
+  applyDocTypes(props, source, warn, tag);
   detectEnumValues(props, css, tag, warn);
 
   // Parse template from render(). Defaults are needed to pick the branch of a
@@ -228,6 +231,7 @@ function makeProp(name, config) {
     default: '',
     reflect: reflectMatch ? reflectMatch[1] === 'true' : false,
     values: [],
+    docType: '',
   };
 }
 
@@ -251,27 +255,94 @@ function applyDefaults(props, source) {
   }
 }
 
+// Types the existing `static properties` map already covers exactly. Recording
+// these as a docType would change nothing, so they're left alone — which also
+// keeps `@prop {string} label` from suppressing CSS enum inference.
+const TRIVIAL_DOC_TYPES = new Set([
+  'string', 'number', 'boolean', 'any', 'unknown', 'object', 'void', 'null',
+  'undefined', '*', 'Object', 'String', 'Number', 'Boolean', 'Array',
+]);
+
+// Type text is emitted verbatim into a TS type position, so it is held to a
+// conservative grammar. Braces are already balanced by extraction; `;` and
+// backticks are excluded because either could end the declaration early.
+const SAFE_DOC_TYPE = /^[\w\s<>[\]{}(),.|&'"?:=>-]+$/;
+const MAX_DOC_TYPE = 200;
+
+// Types resolvable without an import. A documented type naming anything else
+// generates a wrapper referring to a symbol prism cannot import for it.
+const PORTABLE_TYPE_NAMES = new Set([
+  'Array', 'ReadonlyArray', 'Record', 'Partial', 'Required', 'Readonly', 'Pick',
+  'Omit', 'Exclude', 'Extract', 'NonNullable', 'ReturnType', 'Parameters',
+  'InstanceType', 'Awaited', 'Uppercase', 'Lowercase', 'Capitalize',
+  'Date', 'Map', 'Set', 'WeakMap', 'WeakSet', 'Promise', 'RegExp', 'Error',
+  'Function', 'Object', 'String', 'Number', 'Boolean', 'Symbol', 'BigInt',
+  'JSON', 'Math', 'Iterable', 'Iterator', 'ArrayBuffer', 'Blob', 'File', 'URL',
+  'Element', 'HTMLElement', 'Node', 'Event', 'CustomEvent', 'EventTarget',
+]);
+
 /**
- * Read documented string-literal unions from the class JSDoc.
+ * Read documented types from the class JSDoc.
  *
- * Authored intent beats CSS inference on both counts it gets wrong: the default
- * member usually carries no `:host([x="…"])` rule to be inferred from — it is
- * the unqualified base style — and a variant driven from JS leaves no CSS
- * attribute selector at all, so the union comes back empty and the prop
- * collapses to a bare `string` in every wrapper.
+ * Two things come out of a `@prop {…} name` tag:
+ *
+ *   - a **string-literal union** becomes the prop's enum values. Authored intent
+ *     beats CSS inference on both counts it gets wrong: the default member
+ *     usually carries no `:host([x="…"])` rule to be inferred from — it is the
+ *     unqualified base style — and a variant driven from JS leaves no attribute
+ *     selector at all, so the union comes back empty and the prop collapses to a
+ *     bare `string` in every wrapper.
+ *
+ *   - **any other non-trivial type** is kept verbatim as `prop.docType`. Lit's
+ *     `static properties` can only say `Array`, which every generator renders as
+ *     `unknown[]` — and the props that carry real shape (chart series, calendar
+ *     events, table rows) are exactly the ones a consumer most needs typed. If
+ *     the author wrote the shape down, it is used.
  *
  * @param {PropMeta[]} props
  * @param {string} source
+ * @param {(code: string, message: string, extra?: object) => void} warn
+ * @param {string} [tag]
  */
-function applyDocTypes(props, source) {
+function applyDocTypes(props, source, warn, tag) {
   const byName = new Map(props.map((p) => [p.name, p]));
-  for (const m of source.matchAll(/@prop\s+\{([^}]+)\}\s+(\w+)/g)) {
-    const [, typeText, name] = m;
-    const prop = byName.get(name);
+  // Braces are matched rather than regex-captured: a nested object type such as
+  // `{Array<{label: string}>}` ends at its *matching* brace, and `[^}]+` would
+  // truncate it to `Array<{label: string` — emitting a broken type.
+  const tagPattern = /@prop\s*\{/g;
+  let m;
+  while ((m = tagPattern.exec(source)) !== null) {
+    const bodyStart = m.index + m[0].length;
+    const raw = extractBalanced(source, bodyStart);
+    const afterBrace = bodyStart + raw.length + 1;
+    tagPattern.lastIndex = afterBrace;
+
+    const nameMatch = /^\s+(\w+)/.exec(source.slice(afterBrace, afterBrace + 80));
+    if (!nameMatch) continue;
+    const prop = byName.get(nameMatch[1]);
     if (!prop) continue;
-    // Only literal unions — leave `{string}`, `{number}` etc. to the type map.
-    if (!/^\s*'[^']*'(\s*\|\s*'[^']*')*\s*$/.test(typeText)) continue;
-    prop.values = [...new Set([...typeText.matchAll(/'([^']*)'/g)].map((v) => v[1]))];
+
+    const typeText = raw.trim();
+
+    // A string-literal union drives the enum values, as before.
+    if (/^'[^']*'(\s*\|\s*'[^']*')*$/.test(typeText)) {
+      prop.values = [...new Set([...typeText.matchAll(/'([^']*)'/g)].map((v) => v[1]))];
+      continue;
+    }
+
+    if (TRIVIAL_DOC_TYPES.has(typeText)) continue;
+    if (typeText.length > MAX_DOC_TYPE || !SAFE_DOC_TYPE.test(typeText)) {
+      warn('unusable-doc-type', `${tag ?? 'component'} prop "${prop.name}" has a documented type prism can't emit safely; falling back to ${prop.type}`, { tag, prop: prop.name });
+      continue;
+    }
+
+    const unportable = [...new Set([...typeText.matchAll(/\b([A-Z]\w*)/g)].map((x) => x[1]))]
+      .filter((n) => !PORTABLE_TYPE_NAMES.has(n));
+    if (unportable.length > 0) {
+      warn('unportable-doc-type', `${tag ?? 'component'} prop "${prop.name}" documents ${unportable.map((n) => `"${n}"`).join(', ')}, which prism cannot import into the wrappers — inline the shape or the generated types won't compile`, { tag, prop: prop.name, names: unportable });
+    }
+
+    prop.docType = typeText;
   }
 }
 
@@ -290,12 +361,29 @@ function extractCSS(source) {
 }
 
 /**
+ * The literal value of a prop's default, or null when it isn't a plain
+ * non-empty string. `this.size = 'md'` yields `md`; a computed default, a
+ * number, or `''` yields null.
+ */
+function defaultStringValue(prop) {
+  const m = /^(['"])(.*)\1$/.exec((prop.default ?? '').trim());
+  return m && m[2].length > 0 ? m[2] : null;
+}
+
+/**
  * Detect enum values from CSS :host([prop="value"]) patterns.
  *
  * A fallback for props with no documented union — see applyDocTypes. Where both
  * sources exist the documented one wins, but the CSS is still read so the two
  * can be compared: a styled value the docs don't list is genuine drift, and
  * this is the only pass positioned to see both.
+ *
+ * The CSS scan has the same blind spot the documented-union fix addressed: the
+ * default member is the unqualified base style and so has no `:host([x="…"])`
+ * rule to be found. Here the default itself supplies it — a prop's own default
+ * is by construction a legal value for that prop, so unioning it in cannot be
+ * wrong, and leaving it out types `size` as `'sm' | 'lg'` when the component
+ * ships `'md'`.
  *
  * @param {PropMeta[]} props
  * @param {string} css
@@ -317,7 +405,11 @@ function detectEnumValues(props, css, tag, warn) {
       values.add(match[1]);
     }
 
+    const def = defaultStringValue(prop);
+
     if (prop.values.length > 0) {
+      // Documented union wins, but both other sources are checked against it —
+      // either mismatch is drift the author would want to know about.
       const documented = new Set(prop.values);
       const undocumented = [...values].filter((v) => !documented.has(v));
       if (undocumented.length > 0) {
@@ -328,10 +420,20 @@ function detectEnumValues(props, css, tag, warn) {
           { tag, prop: prop.name, values: undocumented }
         );
       }
-      continue;   // documented union wins
+      if (def !== null && !documented.has(def)) {
+        warn(
+          'doc-drift',
+          `${tag ?? 'component'} defaults ${prop.name} to "${def}", which its documented union omits`,
+          { tag, prop: prop.name, values: [def] }
+        );
+      }
+      continue;
     }
 
     if (values.size > 0) {
+      // Appended, not prepended: a prop whose default the CSS already styles is
+      // unchanged, so this only ever adds the member that was missing.
+      if (def !== null) values.add(def);
       prop.values = [...values];
     }
   }

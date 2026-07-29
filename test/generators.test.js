@@ -12,6 +12,7 @@ import { generateHTML } from '../src/generators/html.js';
 import { generateCSS } from '../src/generators/css.js';
 import { isPrismGenerated } from '../src/generators/header.js';
 import { sweepOrphans } from '../src/generators/prune.js';
+import { reservedCollisions } from '../src/generators/identifiers.js';
 
 /** @type {import('../src/parser.js').ComponentMeta} */
 const meta = {
@@ -907,5 +908,89 @@ describe('reserved words in binding position', () => {
     );
     expect(content).toContain('{variant}');
     expect(content).not.toContain('variantProp');
+  });
+});
+
+describe('framework-reserved prop names', () => {
+  const props = (...names) => names.map((name) => ({
+    name, type: 'String', default: '', reflect: false, values: [], docType: '',
+  }));
+
+  it('flags a prop React and Preact intercept before the component sees it', () => {
+    const out = reservedCollisions(props('key', 'label'), ['react', 'preact', 'vue']);
+    expect(out).toEqual([{ prop: 'key', frameworks: ['react', 'preact'] }]);
+  });
+
+  it('only reports frameworks actually being generated', () => {
+    expect(reservedCollisions(props('key'), ['vue', 'angular'])).toEqual([]);
+    expect(reservedCollisions(props('key'), ['react'])).toEqual([
+      { prop: 'key', frameworks: ['react'] },
+    ]);
+  });
+
+  it('flags children against every generator that injects its own', () => {
+    const out = reservedCollisions(props('children'), ['react', 'preact', 'svelte', 'solid', 'vue', 'angular']);
+    expect(out[0].frameworks).toEqual(['react', 'preact', 'svelte', 'solid']);
+  });
+
+  it('says nothing about ordinary prop names', () => {
+    expect(reservedCollisions(props('label', 'variant', 'size'), ['react', 'preact'])).toEqual([]);
+  });
+});
+
+describe('documented prop types reach every wrapper', () => {
+  const chartMeta = {
+    ...meta,
+    tag: 'arc-chart',
+    className: 'ArcChart',
+    pascalName: 'Chart',
+    props: [{
+      name: 'series',
+      type: 'Array',
+      default: '[]',
+      reflect: false,
+      values: [],
+      docType: 'Array<{label: string, data: number[]}>',
+    }],
+    events: [],
+    eventDetails: {},
+  };
+  const DOC = 'Array<{label: string, data: number[]}>';
+
+  it('React', () => {
+    const c = readFileSync(generateReact(chartMeta, config('out/r2'), tmpDir).path, 'utf-8');
+    expect(c).toContain(`series?: ${DOC};`);
+    expect(c).not.toContain('unknown[]');
+  });
+
+  it('Vue', () => {
+    const c = readFileSync(generateVue(chartMeta, config('out/v2'), tmpDir).path, 'utf-8');
+    expect(c).toContain(`series?: ${DOC};`);
+  });
+
+  it('Svelte', () => {
+    const c = readFileSync(generateSvelte(chartMeta, config('out/s2'), tmpDir).path, 'utf-8');
+    expect(c).toContain(`series?: ${DOC};`);
+  });
+
+  it('Angular', () => {
+    const c = readFileSync(generateAngular(chartMeta, config('out/a2'), tmpDir).path, 'utf-8');
+    expect(c).toContain(`@Input() series: ${DOC} = [];`);
+  });
+
+  it('Solid', () => {
+    const c = readFileSync(generateSolid(chartMeta, config('out/so2'), tmpDir).path, 'utf-8');
+    expect(c).toContain(`series?: ${DOC};`);
+  });
+
+  it('Preact', () => {
+    const c = readFileSync(generatePreact(chartMeta, config('out/p2'), tmpDir).path, 'utf-8');
+    expect(c).toContain(`series?: ${DOC};`);
+  });
+
+  it('falls back to the static properties type when nothing is documented', () => {
+    const plain = { ...chartMeta, props: [{ ...chartMeta.props[0], docType: '' }] };
+    const c = readFileSync(generateReact(plain, config('out/r3'), tmpDir).path, 'utf-8');
+    expect(c).toContain('series?: unknown[];');
   });
 });

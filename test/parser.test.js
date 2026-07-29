@@ -864,3 +864,126 @@ describe('diagnostics collector', () => {
     expect(printed.join('\n')).toContain('"ghost"');
   });
 });
+
+describe('enum values include the prop default', () => {
+  const component = (styles, ctor = "this.size = 'md';") => `
+    /** @tag arc-tag */
+    export class ArcTag extends LitElement {
+      static properties = { size: { type: String } };
+      constructor() { super(); ${ctor} }
+      static styles = css\`${styles}\`;
+    }
+  `;
+  const sizeOf = (src) =>
+    parseComponent(src, '/src/content/tag.js', prefix).props.find((p) => p.name === 'size');
+
+  it('adds a default the CSS never styles', () => {
+    const size = sizeOf(component(`
+      :host([size="sm"]) { font-size: 12px; }
+      :host([size="lg"]) { font-size: 18px; }
+    `));
+    expect(size.values).toEqual(['sm', 'lg', 'md']);
+  });
+
+  it('does not duplicate a default the CSS already styles', () => {
+    const size = sizeOf(component(`
+      :host([size="sm"]) { font-size: 12px; }
+      :host([size="md"]) { font-size: 14px; }
+    `));
+    expect(size.values).toEqual(['sm', 'md']);
+  });
+
+  it('ignores an empty-string default', () => {
+    const size = sizeOf(component(':host([size="sm"]) { font-size: 12px; }', "this.size = '';"));
+    expect(size.values).toEqual(['sm']);
+  });
+
+  it('ignores a default that is not a string literal', () => {
+    const size = sizeOf(component(':host([size="sm"]) { font-size: 12px; }', 'this.size = SIZES[0];'));
+    expect(size.values).toEqual(['sm']);
+  });
+
+  it('does not invent a union from a default alone', () => {
+    // One legal value is not an enum — without CSS variants this stays a string.
+    const size = sizeOf(component(':host { display: inline-flex; }'));
+    expect(size.values).toEqual([]);
+  });
+
+  it('warns when a documented union omits the component default', () => {
+    const diagnostics = [];
+    parseComponent(`
+      /**
+       * @tag arc-tag
+       * @prop {'sm' | 'lg'} size
+       */
+      export class ArcTag extends LitElement {
+        static properties = { size: { type: String } };
+        constructor() { super(); this.size = 'md'; }
+      }
+    `, '/src/content/tag.js', prefix, {}, diagnostics);
+    expect(diagnostics.map((d) => d.code)).toEqual(['doc-drift']);
+    expect(diagnostics[0].message).toContain('defaults size to "md"');
+  });
+});
+
+describe('documented types beyond literal unions', () => {
+  const parse = (typeText, propName = 'series', type = 'Array') => {
+    const diagnostics = [];
+    const meta = parseComponent(`
+      /**
+       * @tag arc-chart
+       * @prop {${typeText}} ${propName}
+       */
+      export class ArcChart extends LitElement {
+        static properties = { ${propName}: { type: ${type} } };
+      }
+    `, '/src/content/chart.js', prefix, {}, diagnostics);
+    return { prop: meta.props.find((p) => p.name === propName), diagnostics };
+  };
+
+  it('keeps a nested object type verbatim rather than truncating at the first brace', () => {
+    const { prop } = parse('Array<{label: string, data: number[]}>');
+    expect(prop.docType).toBe('Array<{label: string, data: number[]}>');
+  });
+
+  it('keeps a bare shape type', () => {
+    const { prop } = parse('{ id: string, rows: number[] }[]', 'rows');
+    expect(prop.docType).toBe('{ id: string, rows: number[] }[]');
+  });
+
+  it('leaves trivial types to the existing type map', () => {
+    expect(parse('string', 'label', 'String').prop.docType).toBe('');
+    expect(parse('number', 'max', 'Number').prop.docType).toBe('');
+    expect(parse('Array', 'items').prop.docType).toBe('');
+  });
+
+  it('leaves a literal union on values, not docType', () => {
+    const { prop } = parse("'a' | 'b'", 'variant', 'String');
+    expect(prop.docType).toBe('');
+    expect(prop.values).toEqual(['a', 'b']);
+  });
+
+  it('warns about a documented type naming a symbol it cannot import', () => {
+    const { prop, diagnostics } = parse('ChartSeries[]');
+    expect(prop.docType).toBe('ChartSeries[]');
+    expect(diagnostics.map((d) => d.code)).toEqual(['unportable-doc-type']);
+    expect(diagnostics[0].message).toContain('"ChartSeries"');
+  });
+
+  it('accepts built-in generics without warning', () => {
+    const { prop, diagnostics } = parse('Record<string, Array<number>>');
+    expect(prop.docType).toBe('Record<string, Array<number>>');
+    expect(diagnostics).toEqual([]);
+  });
+
+  it('refuses a type it cannot emit safely and says so', () => {
+    const { prop, diagnostics } = parse('string; declare const x: number');
+    expect(prop.docType).toBe('');
+    expect(diagnostics.map((d) => d.code)).toEqual(['unusable-doc-type']);
+  });
+
+  it('ignores a @prop tag naming a prop that does not exist', () => {
+    const { diagnostics } = parse('Array<number>', 'series');
+    expect(diagnostics).toEqual([]);
+  });
+});
