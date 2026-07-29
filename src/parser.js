@@ -142,7 +142,7 @@ export function parseComponent(source, filePath, prefix = 'arc', overrides = {},
 
   // Named slots. Nothing recorded these before, so every wrapper projected a
   // single anonymous child list and named-slot content had nowhere to go.
-  const { slots, hasDefaultSlot } = extractSlots(template);
+  const { slots, hasDefaultSlot } = extractSlots(template, source);
 
   return {
     tag, className, pascalName, tier, props, css, template, events, eventDetails,
@@ -820,16 +820,29 @@ function extractTemplate(source, defaults = {}) {
  * Named slots a component exposes, in template order, and whether it also has
  * an unnamed default slot.
  *
+ * Two sources, unioned. The template is authoritative and ordered, so it comes
+ * first. But `render()` isn't always extractable — a template assembled through
+ * helpers or held in a field yields nothing — and a component that documents
+ * `@slot start` has said the slot exists regardless of whether this parser could
+ * see it. Reading both means a slot has to be hidden from both to be missed.
+ *
  * A slot name is legal HTML but not necessarily a legal identifier — `slot="a-b"`
  * is common and can't be a Svelte snippet prop — so names are recorded verbatim
  * and it's the consumer's job to decide what it can do with each one.
  *
  * @param {string} template
+ * @param {string} [source] - full file, for `@slot` JSDoc tags
  * @returns {{ slots: string[], hasDefaultSlot: boolean }}
  */
-function extractSlots(template) {
+function extractSlots(template, source = '') {
   const named = new Set();
   for (const m of template.matchAll(/<slot\b[^>]*?\bname\s*=\s*["']([^"']+)["']/g)) {
+    named.add(m[1]);
+  }
+  // `@slot name — description`. The name must start with a word character, so a
+  // bare `@slot - the default content` documents the default slot and adds no
+  // named one.
+  for (const m of source.matchAll(/@slot\s+([A-Za-z_][\w-]*)/g)) {
     named.add(m[1]);
   }
   // A `<slot>` with no name attribute anywhere in its tag is the default slot.

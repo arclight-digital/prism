@@ -1,9 +1,31 @@
 /**
- * The prop → TypeScript type mapping, shared by all six wrapper generators.
+ * Shared decisions about the generated component surface — prop types, the
+ * passthrough escape hatch, and whether a wrapper takes children at all.
  *
- * This lived as six byte-identical copies, which meant a change to how props
- * are typed had to be made six times to take effect once.
+ * The type mapping lived as six byte-identical copies, which meant a change to
+ * how props are typed had to be made six times to take effect once.
  */
+
+/**
+ * Whether a wrapper should accept children.
+ *
+ * A component with no default `<slot>` has nowhere to put them: `arc-confirm`
+ * declared `children` and rendered them into an element that discards them, so
+ * content passed there vanished silently. Omitting the member makes it a type
+ * error instead.
+ *
+ * The absence of a default slot is only trusted when a template was actually
+ * parsed. An unextractable render() yields an empty template, which would look
+ * identical to "this component has no slots" and would strip children from
+ * wrappers that need them — a worse failure than the one being fixed.
+ *
+ * @param {import('../parser.js').ComponentMeta} meta
+ * @returns {boolean}
+ */
+export function acceptsChildren(meta) {
+  if (!meta.template) return true;
+  return meta.hasDefaultSlot !== false;
+}
 
 /**
  * Map a WC property type to a TypeScript type string.

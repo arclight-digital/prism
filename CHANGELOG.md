@@ -4,6 +4,19 @@
 
 ### Fixed
 
+- **camelCase props never reached the element.** 53 props across 35 components, silently. HTML attribute names are lowercased on the way into the DOM, so `confirmLabel` was written as `confirmlabel` — not an attribute Lit observes, so the property kept its constructor default and nothing warned. Measured on `arc-confirm`: `confirmLabel="Delete"` produced `confirmlabel="Delete"` in the DOM with `el.confirmLabel === 'Confirm'`. All-lowercase props were unaffected, which is why `open` and `heading` worked and made the failure look arbitrary.
+
+  Fixed by setting the property, not by emitting kebab-case. Kebab-case would have been worse for the 19 Boolean props: Lit's Boolean converter is presence-based, so `auto-resize="false"` sets `autoResize` to **true** — turning a silent no-op into a silently inverted value on every boolean a consumer explicitly sets to false.
+
+  - **Svelte** binds a ref and assigns the properties in an `$effect`, and those props are left out of the template so no dead attribute is emitted beside them. `undefined` is never written through, so a prop the consumer omits still resolves to the element's own default rather than being overwritten with nothing. One consequence worth knowing: `$effect` doesn't run during SSR, so these values are applied on hydration rather than being present in the server HTML — where previously they were present but wrong.
+  - **Angular** binds them with `[confirmLabel]` instead of `[attr.confirmLabel]`; `setAttribute` lowercases, so the attribute form could never have worked. Reflected props still appear as attributes for CSS, because Lit reflects the property itself.
+  - **Solid** uses its `prop:` namespace, which sets a property rather than an attribute.
+  - React is unaffected — `@lit/react`'s `createComponent` sets properties from the element class. Vue and Preact both resolve `key in el` against the original casing and appear unaffected; neither was changed.
+
+- **Wrappers accepted children for elements with no default slot.** `arc-confirm` declared `children` and rendered them into an element that discards them, so the content vanished. All six wrappers now omit the children member when the component has no default `<slot>`, making it a type error instead of a silent no-op. The absence is only trusted when a template was actually parsed — an unextractable `render()` yields an empty template that would otherwise look identical to "no slots" and strip children from wrappers that need them.
+
+- **`@slot` JSDoc tags are read alongside the template.** Slot detection scanned the extracted template, which misses components whose `render()` can't be parsed. Documented `@slot start` tags are now unioned in, so a slot has to be invisible to both sources to be missed. A bare `@slot - description` documents the default slot and adds no named one.
+
 - **Named-slot content was silently dropped by the Svelte wrappers.** `arc-toolbar` and `arc-status-bar` lost every `slot="start"` and `slot="end"` child: only the unslotted content survived, so transport controls, position readouts and loop-integrity pips all rendered nowhere. Build clean, typecheck clean, no warning.
 
   Svelte routes `slot="start"` on a **component's** child to a snippet prop of that name. The generated wrapper rendered only `{@render children?.()}` and declared no such prop, so the content had nowhere to go. Used against the custom element directly it works, because Svelte doesn't intercept `slot` on a plain element — the wrapper layer was what broke it.

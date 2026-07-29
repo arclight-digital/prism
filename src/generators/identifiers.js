@@ -31,6 +31,30 @@ export function safeIdent(name, taken = new Set()) {
 }
 
 /**
+ * Props whose name changes under lowercasing, and so cannot travel as an
+ * attribute at all.
+ *
+ * HTML attribute names are case-insensitive and get lowercased on the way into
+ * the DOM, so `confirmLabel` is written as `confirmlabel` — which is not the
+ * attribute Lit observes, so the element keeps its constructor default and
+ * nothing warns. Measured on `arc-confirm`: `confirmLabel="Delete"` produced
+ * `confirmlabel="Delete"` in the DOM with `el.confirmLabel === 'Confirm'`.
+ * All-lowercase props are unaffected — `open` and `heading` arrive intact.
+ *
+ * Emitting kebab-case instead would be worse, not better: Lit's Boolean
+ * converter is presence-based, so `auto-resize="false"` sets `autoResize` to
+ * *true*. That turns a silent no-op into a silently inverted value on every
+ * boolean a consumer explicitly sets to false. The fix is to set the property
+ * and never involve an attribute name.
+ *
+ * @param {import('../parser.js').PropMeta[]} props
+ * @returns {import('../parser.js').PropMeta[]}
+ */
+export function mixedCaseProps(props) {
+  return props.filter((p) => p.name !== p.name.toLowerCase());
+}
+
+/**
  * Map each named slot to the identifier its snippet prop binds to.
  *
  * Slot names are HTML, snippet props are identifiers, and the two grammars don't

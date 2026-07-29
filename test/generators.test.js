@@ -872,7 +872,10 @@ describe('reserved words in binding position', () => {
     expect(isValidBindingPattern(pattern)).toBe(true);
     expect(pattern).toContain('for: forProp_');
     expect(content).toContain('for={forProp_}');
-    expect(content).toContain('{forProp}');
+    // `forProp` is camelCase, so it reaches the element as a property rather
+    // than an attribute, and is deliberately absent from the template.
+    expect(content).toContain('el.forProp = forProp;');
+    expect(content).not.toContain('{forProp}');
   });
 
   it('Angular qualifies template expressions so its own keywords parse', () => {
@@ -1124,5 +1127,124 @@ describe('named slots reach the wrappers', () => {
     delete legacy.slots;
     expect(() => svelteOf(legacy)).not.toThrow();
     expect(() => vueOf(legacy)).not.toThrow();
+  });
+});
+
+describe('camelCase props reach the element as properties', () => {
+  const confirm = (over = {}) => ({
+    ...meta,
+    tag: 'arc-confirm',
+    className: 'ArcConfirm',
+    pascalName: 'Confirm',
+    tier: 'application',
+    props: [
+      { name: 'open', type: 'Boolean', default: 'false', reflect: true, values: [], docType: '' },
+      { name: 'heading', type: 'String', default: "''", reflect: false, values: [], docType: '' },
+      { name: 'confirmLabel', type: 'String', default: "'Confirm'", reflect: false, values: [], docType: '' },
+      { name: 'autoResize', type: 'Boolean', default: 'false', reflect: false, values: [], docType: '' },
+    ],
+    events: [],
+    eventDetails: {},
+    slots: [],
+    hasDefaultSlot: true,
+    template: '<div><slot></slot></div>',
+    ...over,
+  });
+
+  it('Svelte sets them as properties and omits them from the template', () => {
+    const c = readFileSync(generateSvelte(confirm(), config('out/cc-s'), tmpDir).path, 'utf-8');
+    expect(c).toContain('if (confirmLabel !== undefined) el.confirmLabel = confirmLabel;');
+    expect(c).toContain('if (autoResize !== undefined) el.autoResize = autoResize;');
+    expect(c).toContain('bind:this={__el}');
+    // The dead attribute is gone — `confirmlabel` was never observed anyway.
+    expect(c).not.toContain('{confirmLabel}');
+    expect(c).not.toContain('{autoResize}');
+    // All-lowercase props already arrive as properties and are left alone.
+    expect(c).toContain('{open}');
+    expect(c).toContain('{heading}');
+  });
+
+  it('Svelte never writes undefined through, so the element default survives', () => {
+    const noDefault = confirm({
+      props: [{ name: 'confirmLabel', type: 'String', default: '', reflect: false, values: [], docType: '' }],
+    });
+    const c = readFileSync(generateSvelte(noDefault, config('out/cc-s2'), tmpDir).path, 'utf-8');
+    expect(c).toContain('if (confirmLabel !== undefined)');
+  });
+
+  it('Svelte adds no effect at all when every prop is lowercase', () => {
+    const plain = confirm({
+      props: [{ name: 'open', type: 'Boolean', default: 'false', reflect: true, values: [], docType: '' }],
+    });
+    const c = readFileSync(generateSvelte(plain, config('out/cc-s3'), tmpDir).path, 'utf-8');
+    expect(c).not.toContain('$effect');
+    expect(c).not.toContain('bind:this');
+  });
+
+  it('Angular binds them as properties, not attributes', () => {
+    const c = readFileSync(generateAngular(confirm(), config('out/cc-a'), tmpDir).path, 'utf-8');
+    // setAttribute lowercases, so [attr.confirmLabel] could never be observed.
+    expect(c).toContain('[confirmLabel]="this.confirmLabel"');
+    expect(c).not.toContain('[attr.confirmLabel]');
+    // Lowercase String props keep attribute binding, which reflects for CSS.
+    expect(c).toContain('[attr.heading]="this.heading"');
+  });
+
+  it('Solid uses the prop: namespace for them', () => {
+    const c = readFileSync(generateSolid(confirm(), config('out/cc-so'), tmpDir).path, 'utf-8');
+    expect(c).toContain('prop:confirmLabel={local.confirmLabel}');
+    expect(c).toContain('heading={local.heading}');
+    expect(c).not.toContain('prop:heading');
+  });
+});
+
+describe('children only where there is a default slot', () => {
+  const noSlot = {
+    ...meta,
+    tag: 'arc-confirm',
+    className: 'ArcConfirm',
+    pascalName: 'Confirm',
+    props: [],
+    events: [],
+    eventDetails: {},
+    slots: ['actions'],
+    hasDefaultSlot: false,
+    template: '<div class="box"><slot name="actions"></slot></div>',
+  };
+
+  it('Svelte omits the member and the render', () => {
+    const c = readFileSync(generateSvelte(noSlot, config('out/ns-s'), tmpDir).path, 'utf-8');
+    expect(c).not.toContain('children?: Snippet;');
+    expect(c).not.toContain('{@render children?.()}');
+    expect(c).toContain('{@render actions?.()}');
+  });
+
+  it('React, Preact and Solid omit the children member', () => {
+    expect(readFileSync(generateReact(noSlot, config('out/ns-r'), tmpDir).path, 'utf-8'))
+      .not.toContain('children?: React.ReactNode;');
+    expect(readFileSync(generatePreact(noSlot, config('out/ns-p'), tmpDir).path, 'utf-8'))
+      .not.toContain('children?: preact.ComponentChildren;');
+    expect(readFileSync(generateSolid(noSlot, config('out/ns-so'), tmpDir).path, 'utf-8'))
+      .not.toContain('children?: JSX.Element;');
+  });
+
+  it('Vue omits the default slot but keeps named ones', () => {
+    const c = readFileSync(generateVue(noSlot, config('out/ns-v'), tmpDir).path, 'utf-8');
+    expect(c).not.toContain('<slot />');
+    expect(c).toContain('<slot name="actions" />');
+  });
+
+  it('Angular omits ng-content', () => {
+    const c = readFileSync(generateAngular(noSlot, config('out/ns-a'), tmpDir).path, 'utf-8');
+    expect(c).not.toContain('<ng-content />');
+  });
+
+  it('keeps children when the template could not be parsed', () => {
+    // An unextractable render() looks identical to "no slots"; stripping
+    // children there would be a worse bug than the one being fixed.
+    const unknown = { ...noSlot, template: '', hasDefaultSlot: false };
+    const c = readFileSync(generateSvelte(unknown, config('out/ns-u'), tmpDir).path, 'utf-8');
+    expect(c).toContain('children?: Snippet;');
+    expect(c).toContain('{@render children?.()}');
   });
 });

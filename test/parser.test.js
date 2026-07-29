@@ -1094,3 +1094,82 @@ describe('named slots', () => {
     expect(meta.slots).toEqual(['icon-left']);
   });
 });
+
+describe('@slot JSDoc tags', () => {
+  it('recovers slots when render() could not be parsed', () => {
+    // No extractable render(), so the template source yields nothing — the tags
+    // are the only evidence the slots exist.
+    const meta = parseComponent(`
+      /**
+       * @tag arc-app-shell
+       * @slot start - Leading region
+       * @slot end - Trailing region
+       */
+      export class ArcAppShell extends LitElement {}
+    `, '/src/application/app-shell.js', prefix);
+    expect(meta.slots).toEqual(['start', 'end']);
+  });
+
+  it('unions with template slots, template order first', () => {
+    const meta = parseComponent(`
+      /**
+       * @tag arc-toolbar
+       * @slot overflow - Overflow menu
+       */
+      export class ArcToolbar extends LitElement {
+        render() { return html\`<slot name="start"></slot><slot></slot>\`; }
+      }
+    `, '/src/application/toolbar.js', prefix);
+    expect(meta.slots).toEqual(['start', 'overflow']);
+    expect(meta.hasDefaultSlot).toBe(true);
+  });
+
+  it('does not double-count a slot documented and present', () => {
+    const meta = parseComponent(`
+      /**
+       * @tag arc-card
+       * @slot footer - Footer
+       */
+      export class ArcCard extends LitElement {
+        render() { return html\`<slot name="footer"></slot>\`; }
+      }
+    `, '/src/content/card.js', prefix);
+    expect(meta.slots).toEqual(['footer']);
+  });
+
+  it('treats a bare @slot as the default slot, adding no named one', () => {
+    const meta = parseComponent(`
+      /**
+       * @tag arc-box
+       * @slot - The default content
+       */
+      export class ArcBox extends LitElement {
+        render() { return html\`<slot></slot>\`; }
+      }
+    `, '/src/content/box.js', prefix);
+    expect(meta.slots).toEqual([]);
+    expect(meta.hasDefaultSlot).toBe(true);
+  });
+});
+
+describe('components with no default slot', () => {
+  it('records hasDefaultSlot false when only named slots exist', () => {
+    const meta = parseComponent(`
+      /** @tag arc-confirm */
+      export class ArcConfirm extends LitElement {
+        render() { return html\`<div class="box"><slot name="actions"></slot></div>\`; }
+      }
+    `, '/src/application/confirm.js', prefix);
+    expect(meta.hasDefaultSlot).toBe(false);
+  });
+
+  it('records hasDefaultSlot false when the template projects nothing', () => {
+    const meta = parseComponent(`
+      /** @tag arc-confirm */
+      export class ArcConfirm extends LitElement {
+        render() { return html\`<div class="box"><p>fixed</p></div>\`; }
+      }
+    `, '/src/application/confirm.js', prefix);
+    expect(meta.hasDefaultSlot).toBe(false);
+  });
+});

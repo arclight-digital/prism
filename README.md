@@ -153,6 +153,14 @@ Every heading in the human report carries the literal prefix `prism: warning:` (
 
 `code` is the stable contract; `message` is for humans and will be reworded. A failure to write the report never fails the generate run.
 
+### camelCase props
+
+A prop whose name changes under lowercasing can't travel as an attribute: `confirmLabel` becomes `confirmlabel` in the DOM, which is not what Lit observes, so the element silently keeps its constructor default. Prism sets these as **properties** instead — an `$effect` against a ref in Svelte, `[confirmLabel]` property binding in Angular, `prop:confirmLabel` in Solid. React, Vue and Preact already resolve the property by its original name.
+
+Kebab-case would be the wrong fix. Lit's Boolean converter is presence-based, so `auto-resize="false"` sets `autoResize` to **true** — worse than the no-op it replaces. Nothing prism generates relies on attribute naming for these props.
+
+One consequence in Svelte: `$effect` doesn't run during SSR, so a camelCase prop is applied on hydration rather than appearing in the server HTML.
+
 ### Named slots
 
 A component with `<slot name="start">` gets a snippet prop per slot in the Svelte wrapper, and a forwarded `<slot name="start" />` in the Vue one. React, Preact, Solid and Angular need nothing — none of them treats `slot` as more than an attribute, so it reaches the element on its own.
