@@ -159,6 +159,7 @@ export default {
 | `tiers` | `string[]` | *required* | Subdirectories within `components` to scan (e.g. `['content', 'reactive']`) |
 | `ignore` | `string[]` | `[]` | Patterns to skip — bare filenames (`index.js`), prefixed (`**/index.js`), or directory globs (`**/icons/**`) |
 | `interactivity` | `Record<string, 'static'\|'hybrid'\|'interactive'>` | `{}` | Per-tag classification overrides. Highest precedence — see [Interactivity detection](#interactivity-detection) |
+| `bindings` | `Record<string, { exclude: string[] }>` | `{}` | Per-tag opt-outs from derived two-way bindings — see [Two-way bindings](#two-way-bindings) |
 
 ### Framework options
 
@@ -195,9 +196,122 @@ Prism uses regex-based parsing (no AST library) to extract metadata from Lit sou
 4. **CSS** from `` css`...` `` template literals
 5. **Enum values** from `:host([prop="value"])` patterns in the CSS
 6. **Template** from `render() { return html`...`; }` — supports variable inlining when templates are built from multiple `html`` ` blocks
-7. **Events** from `dispatchEvent(new CustomEvent('name'))` calls
+7. **Events** from `dispatchEvent(new CustomEvent('name'))` calls — including the top-level keys of each event's `detail` object, which is what [two-way bindings](#two-way-bindings) are derived from
 8. **Host display** from `:host { display: ... }` — determines whether HTML output uses `<div>` or `<span>` wrapper
 9. **Interactivity level** — see below
+
+## Two-way bindings
+
+A wrapper that only passes props *down* is write-only: the framework's copy of `value` never updates, so the next unrelated re-render re-sets the stale value onto the element and silently reverts what the user just typed. Prism derives the write-back path automatically.
+
+The rule is a convention, not a table: **an event whose `detail` carries a key matching a declared prop name is that prop's write-back path.** Where two events carry the same key — a slider firing both `arc-input` and `arc-change` — both are listened to, so a binding tracks the live drag as well as the commit.
+
+The same derivation feeds each framework's own two-way idiom:
+
+| Generator | Consumer writes | Prism emits |
+|---|---|---|
+| Svelte | `bind:value` | `$bindable()` + a handler per event |
+| Vue | `v-model:value` | `update:value` in `defineEmits` |
+| Angular | `[(value)]` | `@Output() valueChange` |
+| Solid, Preact | — | nothing; neither framework has a two-way binding form |
+| React | — | nothing; `@lit/react`'s `createComponent` wires properties and events itself |
+
+### Svelte output
+
+Bound props are declared `$bindable()`, and a handler per event mirrors the detail back:
+
+```svelte
+<script lang="ts">
+  let { value = $bindable(0), min = 0, children, ...rest }: Props = $props();
+
+  function __onArcInput(e: Event) {
+    const detail = (e as CustomEvent).detail as Record<string, unknown> | null;
+    if (detail) {
+      if ('value' in detail) value = detail.value as number;
+    }
+    (rest['onarc-input'] as ((e: Event) => void) | undefined)?.(e);
+  }
+</script>
+
+<arc-slider {value} {min} {...rest}
+  onarc-input={__onArcInput}
+>
+```
+
+Handlers are declared *after* `{...rest}` so they win the spread, then forward explicitly to any handler the consumer passed — so `onarc-input` still fires. `$bindable` is backwards compatible: a parent passing a plain `value` keeps working, the write just stays local.
+
+### Vue output
+
+`v-model:value` desugars to `:value` plus a listener for `update:value`, so the emit has to be declared for the binding to do anything:
+
+```vue
+<script setup lang="ts">
+const emit = defineEmits<{
+  'arc-input': [event: CustomEvent];
+  'update:value': [value: number];
+}>();
+
+function onArcInput(payload: CustomEvent) {
+  emit('arc-input', payload);
+  const detail = payload.detail as Record<string, unknown> | null;
+  if (detail) {
+    if ('value' in detail) emit('update:value', detail.value as number);
+  }
+}
+</script>
+
+<template>
+  <arc-slider :value="value" @arc-input="onArcInput"><slot /></arc-slider>
+</template>
+```
+
+The original `arc-input` relay still fires, so `@arc-input` on the wrapper keeps working whether or not you use `v-model`.
+
+### Angular output
+
+`[(value)]` desugars to `[value]` plus `(valueChange)`, so it doesn't compile at all without the matching output:
+
+```ts
+@Output() arcInput = new EventEmitter<CustomEvent>();
+@Output() valueChange = new EventEmitter<number>();
+
+onArcInput(event: CustomEvent) {
+  this.arcInput.emit(event);
+  const detail = event.detail as Record<string, unknown> | null;
+  if (!detail) return;
+  if ('value' in detail) {
+    const next = detail.value as number;
+    this.value = next;
+    this.valueChange.emit(next);
+  }
+}
+```
+
+The local `@Input()` is updated as well as emitted, so a one-way `[value]` consumer sees the element's current state instead of having the stale bound value pushed back on the next change detection.
+
+### `config.bindings` — opt-outs
+
+The convention has exceptions, and they are the kind that fail quietly, so they live in config rather than a JSDoc tag:
+
+```js
+// prism.config.js
+bindings: {
+  // detail.label is the *selected option's* text, not the field's own label —
+  // binding it would overwrite the field label on every change
+  'arc-select': { exclude: ['label'] },
+  // detail.value is the copied string; the button never changes it
+  'arc-copy-button': { exclude: ['value'] },
+},
+```
+
+Two kinds of exception are worth looking for:
+
+- **Name collisions** — the detail key means something different from the prop it shares a name with. This is a real bug: the binding writes the wrong data.
+- **Echoes** — the element dispatches its own unchanged prop as context (`detail: { value: this.value }` from a copy button) rather than reporting a change. Harmless, since the write is a no-op, but it puts `$bindable()` on a prop that can never change.
+
+Only top-level `detail` keys count. A nested payload (`detail: { href, item: { label } }`) never produces a binding, so a component reporting some *other* object's `label` needs no opt-out.
+
+Malformed entries throw at config load — an unknown field, a tag that isn't a valid custom-element name, or an `exclude` that isn't an array of strings.
 
 ## Interactivity detection
 

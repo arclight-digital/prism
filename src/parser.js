@@ -22,6 +22,7 @@
  * @property {string} css - raw CSS string from static styles
  * @property {string} template - raw HTML string from render()
  * @property {string[]} events - custom event names
+ * @property {Record<string, string[]>} eventDetails - event name → keys of its `detail` object
  * @property {'static'|'hybrid'|'interactive'} interactivity - how much JS the component needs
  * @property {string} hostDisplay - CSS display value from :host (e.g. 'block', 'inline-flex')
  */
@@ -36,6 +37,11 @@ export const VALID_TAG = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$/;
 // string literal in generated wrappers). Custom events are conventionally
 // lowercase/kebab-case; we allow word characters and hyphens.
 const VALID_EVENT = /^[a-z][\w-]*$/i;
+
+// A detail key is stricter still: it is emitted as a bare identifier on the
+// left of an assignment in the generated wrappers, so it must be a plain JS
+// identifier. No `$` — that is a rune sigil in Svelte and would collide.
+const VALID_DETAIL_KEY = /^[a-z_][\w]*$/i;
 
 /**
  * Parse a Lit component source file into ComponentMeta.
@@ -92,7 +98,7 @@ export function parseComponent(source, filePath, prefix = 'arc', overrides = {})
   const template = extractTemplate(source, propDefaults);
 
   // Parse custom events from dispatchEvent calls
-  const events = extractEvents(source);
+  const { events, eventDetails } = extractEvents(source);
 
   // Detect interactivity level
   const classification = classify(source, events, tag, overrides);
@@ -102,7 +108,7 @@ export function parseComponent(source, filePath, prefix = 'arc', overrides = {})
   const hostDisplay = extractHostDisplay(css);
 
   return {
-    tag, className, pascalName, tier, props, css, template, events,
+    tag, className, pascalName, tier, props, css, template, events, eventDetails,
     interactivity, classification, hostDisplay,
   };
 }
@@ -691,10 +697,17 @@ function extractHostDisplay(css) {
 }
 
 /**
- * Extract custom event names from dispatchEvent(new CustomEvent('...')) calls.
+ * Extract custom event names — and the keys of each event's `detail` payload —
+ * from dispatchEvent(new CustomEvent('...', { detail: { ... } })) calls.
+ *
+ * The detail keys are what let wrappers derive two-way bindings: an event whose
+ * detail carries a key matching a declared prop is that prop's write-back path.
+ *
+ * @returns {{ events: string[], eventDetails: Record<string, string[]> }}
  */
 function extractEvents(source) {
   const events = new Set();
+  const eventDetails = {};
   const eventPattern = /dispatchEvent\(\s*new\s+CustomEvent\(\s*['"]([^'"]+)['"]/g;
   let match;
   while ((match = eventPattern.exec(source)) !== null) {
@@ -702,11 +715,131 @@ function extractEvents(source) {
     // Drop event names that aren't valid identifiers — they would otherwise be
     // interpolated unescaped (including as an unquoted object key) into the
     // generated wrappers, allowing code injection from an untrusted source.
-    if (VALID_EVENT.test(name)) {
-      events.add(name);
-    } else {
+    if (!VALID_EVENT.test(name)) {
       console.warn(`prism: ignoring event with invalid name "${name}"`);
+      continue;
+    }
+    events.add(name);
+
+    // A component may dispatch the same event from several code paths with
+    // different payloads (a clear button sending `{ value: '' }`, the input
+    // handler sending `{ value, valid }`); union the keys across all of them.
+    const keys = extractDetailKeys(source, eventPattern.lastIndex);
+    if (keys.length === 0) continue;
+    const seen = eventDetails[name] ?? (eventDetails[name] = []);
+    for (const key of keys) {
+      if (!seen.includes(key)) seen.push(key);
     }
   }
-  return [...events];
+  return { events: [...events], eventDetails };
+}
+
+/**
+ * Given the index just past a CustomEvent's name literal, return the top-level
+ * keys of its `detail` object literal.
+ *
+ * The search is bounded to this call's own options object rather than scanning
+ * forward for the next `detail:` — otherwise an event dispatched without a
+ * payload would inherit the keys of whichever event happens to follow it.
+ *
+ * @param {string} source
+ * @param {number} afterName - index just past the closing quote of the name
+ * @returns {string[]}
+ */
+function extractDetailKeys(source, afterName) {
+  let i = afterName;
+  while (i < source.length && /\s/.test(source[i])) i++;
+  if (source[i] !== ',') return [];   // `new CustomEvent('x')` — no options
+  i++;
+  while (i < source.length && /\s/.test(source[i])) i++;
+  if (source[i] !== '{') return [];   // options passed as a variable
+
+  const options = extractBalanced(source, i + 1);
+  const detail = options.match(/(?:^|[,{[(\s])detail\s*:\s*\{/);
+  if (!detail) return [];             // no detail, or detail is a variable
+
+  const body = extractBalanced(options, detail.index + detail[0].length);
+  return extractObjectKeys(body).filter((key) => {
+    if (VALID_DETAIL_KEY.test(key)) return true;
+    console.warn(`prism: ignoring detail key with invalid name "${key}"`);
+    return false;
+  });
+}
+
+/**
+ * Collect the top-level keys of an object-literal body (braces already
+ * stripped). Handles `key: value`, shorthand `key`, and skips over nested
+ * objects, strings, template literals, comments and spreads — anything whose
+ * name isn't statically known can't become a binding anyway.
+ */
+function extractObjectKeys(body) {
+  const keys = [];
+  let depth = 0;
+  let atEntryStart = true;
+  let i = 0;
+
+  while (i < body.length) {
+    const ch = body[i];
+
+    // Comments — a `//` line comment may contain a comma that would otherwise
+    // read as an entry separator.
+    if (ch === '/' && body[i + 1] === '/') {
+      const nl = body.indexOf('\n', i);
+      i = nl === -1 ? body.length : nl + 1;
+      continue;
+    }
+    if (ch === '/' && body[i + 1] === '*') {
+      const end = body.indexOf('*/', i + 2);
+      i = end === -1 ? body.length : end + 2;
+      continue;
+    }
+
+    if (ch === '"' || ch === "'" || ch === '`') {
+      i = skipString(body, i);
+      atEntryStart = false;
+      continue;
+    }
+    if (ch === '{' || ch === '[' || ch === '(') { depth++; atEntryStart = false; i++; continue; }
+    if (ch === '}' || ch === ']' || ch === ')') { depth--; atEntryStart = false; i++; continue; }
+    if (ch === ',' && depth === 0) { atEntryStart = true; i++; continue; }
+    if (/\s/.test(ch)) { i++; continue; }
+
+    if (atEntryStart && depth === 0) {
+      const entry = /^([A-Za-z_$][\w$]*)\s*(?::|,|$)/.exec(body.slice(i));
+      if (entry) keys.push(entry[1]);
+      atEntryStart = false;
+    }
+    i++;
+  }
+
+  return keys;
+}
+
+/**
+ * Given the index of an opening quote or backtick, return the index just past
+ * the matching close. Template literals may nest `${ ... }` containing further
+ * strings, so those are followed recursively.
+ */
+function skipString(source, start) {
+  const quote = source[start];
+  let i = start + 1;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === '\\') { i += 2; continue; }
+    if (ch === quote) return i + 1;
+    if (quote === '`' && ch === '$' && source[i + 1] === '{') {
+      let depth = 1;
+      i += 2;
+      while (i < source.length && depth > 0) {
+        const c = source[i];
+        if (c === '"' || c === "'" || c === '`') { i = skipString(source, i); continue; }
+        if (c === '{') depth++;
+        else if (c === '}') depth--;
+        i++;
+      }
+      continue;
+    }
+    i++;
+  }
+  return i;
 }

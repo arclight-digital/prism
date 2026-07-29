@@ -50,13 +50,46 @@ export function normalizeConfig(config) {
     }
   }
 
+  // Two-way binding overrides. Validated on the same terms and for the same
+  // reason as `interactivity` above: bindings are derived by convention
+  // (an event detail key matching a declared prop name), and the only way to
+  // opt a prop out is here — a typo that silently did nothing would leave the
+  // wrong binding in place, which is worse than no binding at all.
+  if (config.bindings !== undefined
+      && (typeof config.bindings !== 'object' || config.bindings === null
+          || Array.isArray(config.bindings))) {
+    throw new Error('prism: config.bindings must be an object mapping tag names to binding rules');
+  }
+  config.bindings = config.bindings || {};
+  for (const [tag, rule] of Object.entries(config.bindings)) {
+    if (!VALID_TAG.test(tag)) {
+      throw new Error(`prism: config.bindings key "${tag}" is not a valid custom-element tag`);
+    }
+    if (typeof rule !== 'object' || rule === null || Array.isArray(rule)) {
+      throw new Error(`prism: config.bindings["${tag}"] must be an object, e.g. { exclude: ['label'] }`);
+    }
+    for (const field of Object.keys(rule)) {
+      if (field !== 'exclude') {
+        throw new Error(
+          `prism: config.bindings["${tag}"] has unknown field "${field}" — only "exclude" is supported`
+        );
+      }
+    }
+    if (!Array.isArray(rule.exclude) || rule.exclude.some((p) => typeof p !== 'string')) {
+      throw new Error(`prism: config.bindings["${tag}"].exclude must be an array of prop names`);
+    }
+  }
+
   config.prefix = config.prefix || 'arc';
   config.ignore = config.ignore || [];
   config.tiers = config.tiers || [];
 
-  // Propagate prefix to each framework config section
+  // Propagate prefix and bindings to each framework config section
   for (const key of ['react', 'vue', 'svelte', 'angular', 'solid', 'preact', 'html', 'css']) {
-    if (config[key]) config[key].prefix = config.prefix;
+    if (config[key]) {
+      config[key].prefix = config.prefix;
+      config[key].bindings = config.bindings;
+    }
   }
 
   return config;

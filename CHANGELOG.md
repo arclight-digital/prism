@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.3.0 — 2026-07-29
+
+### Added
+
+- **Two-way bindings in the Svelte, Vue and Angular wrappers.** All three were write-only: props were passed down and nothing wrote the element's own changes back, so an unrelated re-render re-set the stale value onto the element and silently reverted what the user had just typed. Each framework's two-way form is now generated — `bind:value` in Svelte, `v-model:value` in Vue, `[(value)]` in Angular. Solid and Preact are unchanged because neither language has a two-way binding form; React was never affected, since `@lit/react`'s `createComponent` wires properties and events itself.
+
+  Bindings are derived by convention rather than a hardcoded table: an event whose `detail` carries a key matching a declared prop name is that prop's write-back path. Where two events carry the same key — a slider firing both `arc-input` and `arc-change` — both are listened to, so a binding tracks the live drag as well as the commit. In arc-ui, 41 of 186 components gain bindings.
+
+  - **Svelte** was the worst of the three: it forwarded *no* events at all, so consumers had no manual escape hatch either, and `bind:` on a non-`$bindable` prop is a hard error. Bound props are now `$bindable()` with a handler per event. Handlers are emitted *after* `{...rest}` so they win the spread, then forward explicitly to any handler the consumer passed, so `onarc-input` still fires.
+  - **Vue** relayed events but never declared the `update:x` emit that `v-model:x` listens for, so `v-model` bound cleanly and silently did nothing.
+  - **Angular** relayed events but never declared the `xChange` output that `[(x)]` desugars to, so the banana-in-a-box form failed to compile. The handler updates the local `@Input()` as well as emitting, so a one-way `[value]` consumer isn't left with the stale bound value on the next change detection.
+
+  All three remain backwards compatible: a parent passing a plain value keeps working, and the existing event relays still fire.
+
+- **`config.bindings` — per-tag binding opt-outs.** The naming convention has exceptions, and they fail quietly, so they live in config alongside `interactivity` rather than in a JSDoc tag codegen can rewrite. `{ 'arc-select': { exclude: ['label'] } }` keeps a prop out of the derived set for every framework at once. Two kinds are worth excluding: **collisions**, where the detail key means something other than the prop it shares a name with — `arc-select` dispatches `detail: { value, label }` where `label` is the *selected option's* text, so binding it would overwrite the field's own label on every change — and **echoes**, where the element dispatches its own unchanged prop as context (`arc-copy-button` reporting the string it just copied) rather than reporting a change. Malformed entries throw at config load: an unknown field, an invalid tag, or an `exclude` that isn't an array of strings.
+
+- **`ComponentMeta.eventDetails`** — event name → the top-level keys of its `detail` object, unioned across every dispatch of that event, since a component may fire the same event from several code paths with different payloads. `events` is unchanged. Extraction is bounded to each `CustomEvent`'s own options object, so an event dispatched without a payload can't inherit the keys of whichever event happens to follow it in the source, and only top-level keys are read — `detail: { href, item: { label } }` yields `href` and `item`, never the nested `label`. Detail keys must be plain identifiers (no `$`, which is a rune sigil in Svelte); anything else is dropped with a warning, on the same reasoning as the existing event-name guard.
+
+### Known issues
+
+Both predate this release and are unrelated to bindings; each is one component, and both are reserved-word collisions between a prop name and the target language.
+
+- `Label.svelte` does not compile: `for` is a declared prop of `arc-label`, and `let { for = '', … } = $props()` is a syntax error on the reserved word.
+- `Text.ts`'s Angular template does not parse: `as` is a declared prop of `arc-text`, and `[attr.as]="as"` is a reserved token in Angular template expressions.
+
 ## 2.2.1 — 2026-07-29
 
 ### Fixed — HTML examples

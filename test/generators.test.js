@@ -78,6 +78,211 @@ describe('generateSvelte', () => {
     expect(content).toContain('$props()');
     expect(content).toContain('arc-button');
   });
+
+  it('leaves props alone when no event detail matches a prop name', () => {
+    const content = readFileSync(generateSvelte(meta, config('out/svelte'), tmpDir).path, 'utf-8');
+    expect(content).not.toContain('$bindable');
+    expect(content).not.toContain('__on');
+  });
+});
+
+describe('generateSvelte — two-way bindings', () => {
+  /** A slider: `value` is written back by both the live and the commit event. */
+  const slider = {
+    ...meta,
+    tag: 'arc-slider',
+    className: 'ArcSlider',
+    pascalName: 'Slider',
+    tier: 'input',
+    props: [
+      { name: 'value', type: 'Number', default: '0', reflect: false, values: [] },
+      { name: 'label', type: 'String', default: "''", reflect: false, values: [] },
+    ],
+    events: ['arc-input', 'arc-change'],
+    eventDetails: { 'arc-input': ['value'], 'arc-change': ['value'] },
+  };
+
+  const generate = (m, bindings) =>
+    readFileSync(
+      generateSvelte(m, { ...config('out/svelte'), bindings }, tmpDir).path,
+      'utf-8'
+    );
+
+  it('marks a prop $bindable when an event detail carries its name', () => {
+    const content = generate(slider);
+    expect(content).toContain('value = $bindable(0)');
+    // A prop no event writes back keeps its plain default.
+    expect(content).toContain("label = ''");
+    expect(content).not.toContain('label = $bindable');
+  });
+
+  it('listens to every event that carries the key', () => {
+    const content = generate(slider);
+    expect(content).toContain('onarc-input={__onArcInput}');
+    expect(content).toContain('onarc-change={__onArcChange}');
+    expect(content).toContain("if ('value' in detail) value = detail.value as number;");
+  });
+
+  it('declares handlers after the spread so they win, then forwards explicitly', () => {
+    const content = generate(slider);
+    expect(content.indexOf('{...rest}')).toBeLessThan(content.indexOf('onarc-input={'));
+    expect(content).toContain("(rest['onarc-input'] as ((e: Event) => void) | undefined)?.(e);");
+  });
+
+  it('emits $bindable() with no default when the prop has none', () => {
+    const noDefault = {
+      ...slider,
+      props: [{ name: 'value', type: 'String', default: '', reflect: false, values: [] }],
+      events: ['arc-change'],
+      eventDetails: { 'arc-change': ['value'] },
+    };
+    expect(generate(noDefault)).toContain('value = $bindable()');
+  });
+
+  it('writes back every bound key an event carries in one handler', () => {
+    const chip = {
+      ...slider,
+      props: [
+        { name: 'value', type: 'String', default: "''", reflect: false, values: [] },
+        { name: 'selected', type: 'Boolean', default: 'false', reflect: true, values: [] },
+      ],
+      events: ['arc-change'],
+      eventDetails: { 'arc-change': ['value', 'selected'] },
+    };
+    const content = chip && generate(chip);
+    expect(content.match(/function __on/g)).toHaveLength(1);
+    expect(content).toContain("if ('selected' in detail) selected = detail.selected as boolean;");
+    expect(content).toContain("if ('value' in detail) value = detail.value as string;");
+  });
+
+  it('ignores detail keys that are not declared props', () => {
+    const extra = { ...slider, eventDetails: { 'arc-change': ['value', 'originalEvent'] } };
+    const content = generate(extra);
+    expect(content).toContain("if ('value' in detail)");
+    expect(content).not.toContain('originalEvent');
+  });
+
+  it('honours a config.bindings exclude — arc-select must not bind its own label', () => {
+    // arc-select dispatches `detail: { value, label }` where `label` is the
+    // *selected option's* text, not the field label. Binding it would rewrite
+    // the field label on every change.
+    const select = {
+      ...slider,
+      tag: 'arc-select',
+      eventDetails: { 'arc-change': ['value', 'label'] },
+      events: ['arc-change'],
+    };
+    const content = generate(select, { 'arc-select': { exclude: ['label'] } });
+    expect(content).toContain("if ('value' in detail) value = detail.value as number;");
+    expect(content).not.toContain("if ('label' in detail)");
+    expect(content).not.toContain('label = $bindable');
+  });
+
+  it('emits no handler at all when every key of an event is excluded', () => {
+    const content = generate(
+      { ...slider, tag: 'arc-copy-button', events: ['arc-copy'], eventDetails: { 'arc-copy': ['value'] } },
+      { 'arc-copy-button': { exclude: ['value'] } }
+    );
+    expect(content).not.toContain('$bindable');
+    expect(content).not.toContain('__onArcCopy');
+    expect(content).toContain('{...rest}>');
+  });
+});
+
+/** Shared by the Vue and Angular binding suites below. */
+const boundMeta = {
+  ...meta,
+  tag: 'arc-slider',
+  className: 'ArcSlider',
+  pascalName: 'Slider',
+  tier: 'input',
+  props: [
+    { name: 'value', type: 'Number', default: '0', reflect: false, values: [] },
+    { name: 'label', type: 'String', default: "''", reflect: false, values: [] },
+  ],
+  events: ['arc-input', 'arc-change'],
+  eventDetails: { 'arc-input': ['value'], 'arc-change': ['value'] },
+};
+
+describe('generateVue — two-way bindings', () => {
+  const generate = (m, bindings) =>
+    readFileSync(generateVue(m, { ...config('out/vue'), bindings }, tmpDir).path, 'utf-8');
+
+  it('declares the update: emit that v-model listens for', () => {
+    const content = generate(boundMeta);
+    expect(content).toContain("'update:value': [value: number];");
+    expect(content).not.toContain("'update:label'");
+  });
+
+  it('emits update: from every event carrying the key, alongside the relay', () => {
+    const content = generate(boundMeta);
+    for (const [event, fn] of [['arc-input', 'onArcInput'], ['arc-change', 'onArcChange']]) {
+      expect(content).toContain(`function ${fn}(payload: CustomEvent) {`);
+      expect(content).toContain(`emit('${event}', payload);`);
+      expect(content).toContain(`@${event}="${fn}"`);
+    }
+    expect(content).toContain("if ('value' in detail) emit('update:value', detail.value as number);");
+  });
+
+  it('leaves unbound events on the inline relay', () => {
+    const content = generate({ ...boundMeta, events: ['arc-input', 'arc-focus'] });
+    expect(content).toContain(`@arc-focus="(payload: CustomEvent) => emit('arc-focus', payload)"`);
+  });
+
+  it('emits nothing extra when no detail key matches a prop', () => {
+    const content = generate({ ...boundMeta, eventDetails: {} });
+    expect(content).not.toContain('update:');
+    expect(content).not.toContain('function onArc');
+  });
+
+  it('honours a config.bindings exclude', () => {
+    const select = { ...boundMeta, tag: 'arc-select', eventDetails: { 'arc-change': ['value', 'label'] } };
+    const content = generate(select, { 'arc-select': { exclude: ['label'] } });
+    expect(content).toContain("'update:value'");
+    expect(content).not.toContain("'update:label'");
+  });
+});
+
+describe('generateAngular — two-way bindings', () => {
+  const generate = (m, bindings) =>
+    readFileSync(generateAngular(m, { ...config('out/angular'), bindings }, tmpDir).path, 'utf-8');
+
+  it('declares the xChange output that [(x)] desugars to', () => {
+    const content = generate(boundMeta);
+    expect(content).toContain('@Output() valueChange = new EventEmitter<number>();');
+    expect(content).not.toContain('labelChange');
+  });
+
+  it('routes bound events through a method that writes back and emits both', () => {
+    const content = generate(boundMeta);
+    expect(content).toContain('(arc-input)="onArcInput($event)"');
+    expect(content).toContain('onArcInput(event: CustomEvent) {');
+    expect(content).toContain('this.arcInput.emit(event);');
+    expect(content).toContain('const next = detail.value as number;');
+    expect(content).toContain('this.value = next;');
+    expect(content).toContain('this.valueChange.emit(next);');
+  });
+
+  it('leaves unbound events on the direct emit', () => {
+    const content = generate({ ...boundMeta, events: ['arc-input', 'arc-focus'] });
+    expect(content).toContain('(arc-focus)="arcFocus.emit($event)"');
+  });
+
+  it('emits nothing extra when no detail key matches a prop', () => {
+    const content = generate({ ...boundMeta, eventDetails: {} });
+    // The `arc-change` relay output is still `arcChange` — only the prop-derived
+    // `valueChange` should be absent.
+    expect(content).not.toContain('valueChange');
+    expect(content).not.toContain('onArcInput(');
+    expect(content).toContain('(arc-input)="arcInput.emit($event)"');
+  });
+
+  it('honours a config.bindings exclude', () => {
+    const select = { ...boundMeta, tag: 'arc-select', eventDetails: { 'arc-change': ['value', 'label'] } };
+    const content = generate(select, { 'arc-select': { exclude: ['label'] } });
+    expect(content).toContain('@Output() valueChange');
+    expect(content).not.toContain('labelChange');
+  });
 });
 
 describe('generateAngular', () => {

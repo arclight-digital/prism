@@ -228,3 +228,49 @@ describe('normalizeConfig — interactivity overrides', () => {
       .toThrow(/must be an object mapping tag names to levels/);
   });
 });
+
+describe('normalizeConfig — binding overrides', () => {
+  const base = () => ({ components: 'src', tiers: ['content'] });
+
+  it('defaults to an empty object', () => {
+    expect(normalizeConfig(base()).bindings).toEqual({});
+  });
+
+  it('accepts an exclude list', () => {
+    const cfg = normalizeConfig({ ...base(), bindings: { 'arc-select': { exclude: ['label'] } } });
+    expect(cfg.bindings['arc-select'].exclude).toEqual(['label']);
+  });
+
+  it('propagates bindings to each framework section', () => {
+    const cfg = normalizeConfig({
+      ...base(),
+      bindings: { 'arc-select': { exclude: ['label'] } },
+      svelte: { outDir: 'out' },
+    });
+    expect(cfg.svelte.bindings['arc-select'].exclude).toEqual(['label']);
+  });
+
+  it('throws on a malformed tag', () => {
+    expect(() => normalizeConfig({ ...base(), bindings: { select: { exclude: ['label'] } } }))
+      .toThrow(/is not a valid custom-element tag/);
+  });
+
+  it('throws on an unknown rule field', () => {
+    expect(() => normalizeConfig({ ...base(), bindings: { 'arc-select': { exclud: ['label'] } } }))
+      .toThrow(/unknown field "exclud"/);
+  });
+
+  it('throws when exclude is missing or not a string array', () => {
+    expect(() => normalizeConfig({ ...base(), bindings: { 'arc-select': {} } }))
+      .toThrow(/must be an array of prop names/);
+    expect(() => normalizeConfig({ ...base(), bindings: { 'arc-select': { exclude: 'label' } } }))
+      .toThrow(/must be an array of prop names/);
+    expect(() => normalizeConfig({ ...base(), bindings: { 'arc-select': { exclude: [1] } } }))
+      .toThrow(/must be an array of prop names/);
+  });
+
+  it('throws when bindings is not an object', () => {
+    expect(() => normalizeConfig({ ...base(), bindings: ['arc-select'] }))
+      .toThrow(/must be an object mapping tag names to binding rules/);
+  });
+});

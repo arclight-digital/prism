@@ -117,6 +117,115 @@ describe('parseComponent', () => {
     expect(meta.events).toHaveLength(2);
   });
 
+  it('extracts detail keys alongside event names', () => {
+    const source = `
+      export class ArcSlider extends LitElement {
+        static properties = { value: { type: Number } };
+        _emit() {
+          this.dispatchEvent(new CustomEvent('arc-input', {
+            detail: { value: this.value, valid: true },
+            bubbles: true,
+            composed: true,
+          }));
+        }
+      }
+      customElements.define('arc-slider', ArcSlider);
+    `;
+    const meta = parseComponent(source, '/src/input/slider.js', prefix);
+    expect(meta.eventDetails['arc-input']).toEqual(['value', 'valid']);
+  });
+
+  it('captures shorthand detail keys', () => {
+    const source = `
+      export class ArcToggle extends LitElement {
+        _emit() {
+          const checked = this.checked;
+          this.dispatchEvent(new CustomEvent('arc-change', { detail: { checked } }));
+        }
+      }
+      customElements.define('arc-toggle', ArcToggle);
+    `;
+    const meta = parseComponent(source, '/src/input/toggle.js', prefix);
+    expect(meta.eventDetails['arc-change']).toEqual(['checked']);
+  });
+
+  it('captures only top-level detail keys, not nested ones', () => {
+    // arc-navigation-menu ships `detail: { href, item: { label, href } }` — the
+    // nested `label` must not read as a binding for the menu's own label prop.
+    const source = `
+      export class ArcNavigationMenu extends LitElement {
+        static properties = { label: { type: String } };
+        _emit() {
+          this.dispatchEvent(new CustomEvent('arc-navigate', {
+            detail: { href, item: { label: item.label, href: item.resolvedHref } },
+          }));
+        }
+      }
+      customElements.define('arc-navigation-menu', ArcNavigationMenu);
+    `;
+    const meta = parseComponent(source, '/src/navigation/navigation-menu.js', prefix);
+    expect(meta.eventDetails['arc-navigate']).toEqual(['href', 'item']);
+  });
+
+  it('does not let a payload-less event inherit the next event\'s detail keys', () => {
+    const source = `
+      export class ArcThing extends LitElement {
+        _emit() {
+          this.dispatchEvent(new CustomEvent('arc-open'));
+          this.dispatchEvent(new CustomEvent('arc-change', { detail: { value: 1 } }));
+        }
+      }
+      customElements.define('arc-thing', ArcThing);
+    `;
+    const meta = parseComponent(source, '/src/input/thing.js', prefix);
+    expect(meta.eventDetails['arc-open']).toBeUndefined();
+    expect(meta.eventDetails['arc-change']).toEqual(['value']);
+  });
+
+  it('unions detail keys across repeated dispatches of the same event', () => {
+    const source = `
+      export class ArcInput extends LitElement {
+        _clear() { this.dispatchEvent(new CustomEvent('arc-change', { detail: { value: '' } })); }
+        _edit()  { this.dispatchEvent(new CustomEvent('arc-change', { detail: { value: this.value, valid: true } })); }
+      }
+      customElements.define('arc-input', ArcInput);
+    `;
+    const meta = parseComponent(source, '/src/input/input.js', prefix);
+    expect(meta.eventDetails['arc-change']).toEqual(['value', 'valid']);
+  });
+
+  it('ignores a detail passed as a variable rather than a literal', () => {
+    const source = `
+      export class ArcThing extends LitElement {
+        _emit(payload) {
+          this.dispatchEvent(new CustomEvent('arc-change', { detail: payload }));
+        }
+      }
+      customElements.define('arc-thing', ArcThing);
+    `;
+    const meta = parseComponent(source, '/src/input/thing.js', prefix);
+    expect(meta.events).toEqual(['arc-change']);
+    expect(meta.eventDetails['arc-change']).toBeUndefined();
+  });
+
+  it('is not fooled by commas inside detail values', () => {
+    const source = `
+      export class ArcGrid extends LitElement {
+        _emit() {
+          this.dispatchEvent(new CustomEvent('arc-sort', {
+            detail: {
+              sort: next.map((s) => ({ ...s })), // reorder, then clone
+              label: \`\${a}, \${b}\`,
+            },
+          }));
+        }
+      }
+      customElements.define('arc-grid', ArcGrid);
+    `;
+    const meta = parseComponent(source, '/src/data/grid.js', prefix);
+    expect(meta.eventDetails['arc-sort']).toEqual(['sort', 'label']);
+  });
+
   it('detects interactivity level — interactive due to events', () => {
     const meta = parseComponent(fixture, filePath, prefix);
     expect(meta.interactivity).toBe('interactive');
@@ -272,6 +381,25 @@ describe('parseComponent', () => {
       `;
       const meta = parseComponent(source, '/src/reactive/widget.js', prefix);
       expect(meta.events).toEqual(['arc-change']);
+    });
+
+    it('drops detail keys that are not plain identifiers', () => {
+      // Detail keys are emitted as bare identifiers on the left of an
+      // assignment in the wrappers, so a quoted key carrying punctuation must
+      // never survive. `$` is excluded too — it is a rune sigil in Svelte.
+      const source = `
+        /** @tag arc-widget */
+        export class ArcWidget extends LitElement {
+          static properties = { value: { type: String } };
+          _emit() {
+            this.dispatchEvent(new CustomEvent('arc-change', {
+              detail: { value: this.value, '(globalThis.pwned = 1)': 1, $rune: 2 },
+            }));
+          }
+        }
+      `;
+      const meta = parseComponent(source, '/src/reactive/widget.js', prefix);
+      expect(meta.eventDetails['arc-change']).toEqual(['value']);
     });
 
     it('still accepts a normal multi-part tag name', () => {
