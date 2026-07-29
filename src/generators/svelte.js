@@ -6,7 +6,7 @@
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { isPrismGenerated } from './header.js';
-import { tsType } from './types.js';
+import { tsType, passthroughMembers } from './types.js';
 import { deriveBindings, boundPropNames, handlerName } from './bindings.js';
 import { localNames } from './identifiers.js';
 
@@ -62,7 +62,7 @@ export function generateSvelte(meta, config, root) {
     lines.push(`    ${prop.name}?: ${tsType(prop)};`);
   }
   lines.push('    children?: Snippet;');
-  lines.push('    [key: string]: unknown;');
+  lines.push(...passthroughMembers(meta.props, '    '));
   lines.push('  }');
   lines.push('');
 

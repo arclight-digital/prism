@@ -994,3 +994,57 @@ describe('documented prop types reach every wrapper', () => {
     expect(c).toContain('series?: unknown[];');
   });
 });
+
+describe('Props escape hatch (P4)', () => {
+  const generated = {
+    Svelte: (m) => readFileSync(generateSvelte(m, config('out/p4s'), tmpDir).path, 'utf-8'),
+    Preact: (m) => readFileSync(generatePreact(m, config('out/p4p'), tmpDir).path, 'utf-8'),
+    Solid: (m) => readFileSync(generateSolid(m, config('out/p4so'), tmpDir).path, 'utf-8'),
+  };
+
+  for (const [name, gen] of Object.entries(generated)) {
+    it(`${name} narrows the blanket index signature to patterns`, () => {
+      const content = gen(meta);
+      expect(content).not.toContain('[key: string]: unknown;');
+      expect(content).toContain('[key: `data-${string}`]: unknown;');
+      expect(content).toContain('[key: `aria-${string}`]: unknown;');
+      expect(content).toContain('[key: `on${string}`]: unknown;');
+      // Common globals stay passable by name.
+      expect(content).toContain('class?: string;');
+      expect(content).toContain('tabindex?: number;');
+    });
+  }
+
+  it('never repeats a global attribute the component declares itself', () => {
+    const withTitle = {
+      ...meta,
+      props: [
+        { name: 'title', type: 'String', default: "''", reflect: false, values: [], docType: '' },
+        { name: 'hidden', type: 'Boolean', default: 'false', reflect: true, values: [], docType: '' },
+      ],
+    };
+    for (const gen of Object.values(generated)) {
+      const content = gen(withTitle);
+      // A duplicate interface key is a hard TS error, so each must appear once.
+      expect(content.match(/^\s*title\?:/gm)).toHaveLength(1);
+      expect(content.match(/^\s*hidden\?:/gm)).toHaveLength(1);
+      // The component's own type wins, not the generic global one.
+      expect(content).toContain('hidden?: boolean;');
+    }
+  });
+
+  it('keeps the Svelte two-way-binding escape hatch reachable', () => {
+    // Consumers reach custom events through `onarc-input` on the spread, which
+    // only type-checks because of the `on${string}` signature.
+    const slider = {
+      ...meta,
+      tag: 'arc-slider', className: 'ArcSlider', pascalName: 'Slider',
+      props: [{ name: 'value', type: 'Number', default: '0', reflect: false, values: [], docType: '' }],
+      events: ['arc-input'],
+      eventDetails: { 'arc-input': ['value'] },
+    };
+    const content = generated.Svelte(slider);
+    expect(content).toContain('[key: `on${string}`]: unknown;');
+    expect(content).toContain("(rest['onarc-input'] as ((e: Event) => void) | undefined)?.(e);");
+  });
+});

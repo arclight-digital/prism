@@ -107,6 +107,12 @@ It fails on: a prop name the target framework reserves, doc drift (a documented 
 
 Skipped `interactive` components and the misclassification list are deliberately *not* strict failures. Both are routine on every run, and a check that can never pass gets removed. `--strict` is a no-op in watch mode.
 
+### What the generated Props accept
+
+The Svelte, Preact and Solid interfaces list the component's own props, then an escape hatch for everything a consumer might pass through to the element: the common global HTML attributes by name (`class`, `id`, `style`, `role`, `part`, `tabindex`, `hidden`, …), plus pattern index signatures for `data-*`, `aria-*` and `on*`. The `on*` pattern is what lets a Svelte consumer attach `onarc-input` through the spread.
+
+This is deliberately narrower than a blanket `[key: string]: unknown`, which accepts every typo — `<Slider valu={3} />` type-checked clean under the old signature. If you pass a global attribute prism doesn't list, open an issue; the list is meant to be generous.
+
 ### Prop names your framework reserves
 
 Some prop names are legal everywhere but never reach the component. React and Preact take `key` and `ref` in the reconciler, so `<Column key="name" />` sets the list key and the prop is silently dropped — no error, no warning, and `key=` is exactly what you write by reflex on something that renders in a list. Prism can't fix this in the wrapper (the value is taken before the component function is called), so it reports the collision and you rename the prop on the component. Checked per framework, and only for frameworks you actually generate.

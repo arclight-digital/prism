@@ -30,6 +30,12 @@
 
 ### Changed
 
+- **Generated Props no longer accept every misspelling.** The Svelte, Preact and Solid interfaces carried a blanket `[key: string]: unknown`, which is what makes `{...rest}` type-check but also accepts anything at all — `<Slider valu={3} />` passed clean, which defeats most of what those types are for. Replaced with pattern index signatures for `data-*`, `aria-*` and `on*`, plus an explicit list of global HTML attributes (`class`, `id`, `style`, `role`, `part`, `tabindex`, `hidden`, …). The spread keeps working, and an unrecognised name is now an error.
+
+  The `on*` signature is not optional: Svelte consumers reach custom events through `onarc-input` on the spread, so narrowing without it would have broken 2.3.0's binding escape hatch. Global attributes a component declares as its own prop are omitted from the generic list rather than repeated, since a duplicate interface key is a hard TS error.
+
+  Solid is included alongside the two reported — its interface carried the identical line. React is unaffected: it never had an index signature.
+
 - **The six generators share one `tsType`.** It existed as six byte-identical copies, so a change to how props are typed had to be made six times to take effect once. Now `src/generators/types.js`, which is also what makes the documented-type support above a single edit rather than six.
 
 - **Parser warnings are collected rather than printed.** `parseComponent` takes an optional fifth argument, a diagnostics array. When one is passed the parser stays silent and pushes structured `{ code, message, file, tag, … }` entries instead, so the CLI can group them into one labelled end-of-run block — capped at 10 per kind, with the full count always stated — rather than interleaving them through hundreds of per-component lines. Called without a collector the parser prints exactly as before, so a library consumer sees no change.
