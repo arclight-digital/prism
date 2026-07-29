@@ -171,16 +171,26 @@ function placeholderForExpr(expr) {
 
 /**
  * Resolve a ${...} expression to an attribute VALUE, or null to drop the whole
- * attribute. Prefers ternary evaluation, then a known attribute default, then
- * the referenced prop's own default; unresolved dynamic values are dropped so
- * an example never carries junk like type="Type".
+ * attribute. Prefers ternary evaluation, then the referenced prop's own default,
+ * then a generic per-attribute fallback; unresolved dynamic values are dropped
+ * so an example never carries junk like type="Type".
+ *
+ * The prop default outranks the generic fallback: `type=${this.type}` on a text
+ * field whose `type` defaults to 'text' must not become `type="button"`, which
+ * silently turns the example's input into a button. The generic table is for
+ * expressions with no usable default of their own.
  */
 function attrValueFor(attrName, expr, defaults) {
   const tern = evalTernary(expr, defaults);
   if (tern !== null) return tern === '' ? null : tern;
-  if (ATTR_VALUE_DEFAULTS[attrName] !== undefined) return ATTR_VALUE_DEFAULTS[attrName];
-  if (isUnresolvable(expr)) return null;
-  return defaultValueFor(expr, defaults);
+  if (!isUnresolvable(expr)) {
+    const fromProp = defaultValueFor(expr, defaults);
+    // An empty default is not a usable value — `href=""` points at the current
+    // page, which is worse than the generic `#`. Fall through instead, and when
+    // there's no generic either the attribute drops rather than emitting `name=""`.
+    if (fromProp !== null && fromProp !== '') return fromProp;
+  }
+  return ATTR_VALUE_DEFAULTS[attrName] !== undefined ? ATTR_VALUE_DEFAULTS[attrName] : null;
 }
 
 /**
@@ -233,14 +243,37 @@ function stripExpressions(template, defaults = {}, label = '') {
           }
         } else {
           // Inside a quoted attribute value.
-          const attrMatch = beforeExpr.match(/([\w-]+)=["'][^"']*$/);
+          const attrMatch = beforeExpr.match(/\s*([\w-]+)=(["'])[^"']*$/);
           const attrName = attrMatch ? attrMatch[1] : null;
           const tern = evalTernary(expr, defaults);
-          if (tern !== null) result += tern;
-          else if (attrName === 'href' || attrName === 'src') result += '#';
-          else if (attrName === 'class' || attrName === 'aria-label') result += placeholderForExpr(expr);
-          else if (attrName && ATTR_VALUE_DEFAULTS[attrName] !== undefined) result += ATTR_VALUE_DEFAULTS[attrName];
-          else result += placeholderForExpr(expr);
+
+          // `style` is the one attribute whose value has internal syntax, so it
+          // takes real values only — never a human-readable placeholder. Both
+          // `--fill: ${this._pct}%` → "--fill: %" and `width: ${this.width}` →
+          // "width: Width" are invalid CSS. When nothing real resolves, the
+          // whole attribute goes, closing quote included. A token list (class)
+          // or free text (aria-label) degrades harmlessly and is left alone.
+          if (attrName === 'style') {
+            const real = tern !== null ? tern : defaultValueFor(expr, defaults);
+            if (real === null || real === '') {
+              result = result.slice(0, result.length - attrMatch[0].length);
+              const close = template.indexOf(attrMatch[2], j);
+              i = close === -1 ? j : close + 1;
+              continue;
+            }
+            result += real;
+            i = j;
+            continue;
+          }
+
+          let text;
+          if (tern !== null) text = tern;
+          else if (attrName === 'href' || attrName === 'src') text = '#';
+          else if (attrName === 'class' || attrName === 'aria-label') text = placeholderForExpr(expr);
+          else if (attrName && ATTR_VALUE_DEFAULTS[attrName] !== undefined) {
+            text = ATTR_VALUE_DEFAULTS[attrName];
+          } else text = placeholderForExpr(expr);
+          result += text;
         }
       } else {
         // Text content position.

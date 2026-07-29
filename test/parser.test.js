@@ -414,3 +414,115 @@ describe('classification provenance', () => {
     expect(m.interactivity).toBe(m.classification.level);
   });
 });
+
+describe('extractTemplate — elements built into a local first', () => {
+  const component = (renderBody, props = '') => `
+    import { LitElement, html, css } from 'lit';
+    export class ArcThing extends LitElement {
+      static properties = { ${props} };
+      constructor() { super(); ${props ? '' : ''} }
+      static styles = css\`:host { display: block; }\`;
+      render() { ${renderBody} }
+    }
+    customElements.define('arc-thing', ArcThing);
+  `;
+
+  const withDefaults = (renderBody, ctor, props) => `
+    import { LitElement, html, css } from 'lit';
+    export class ArcThing extends LitElement {
+      static properties = { ${props} };
+      constructor() { super(); ${ctor} }
+      static styles = css\`:host { display: block; }\`;
+      render() { ${renderBody} }
+    }
+    customElements.define('arc-thing', ArcThing);
+  `;
+
+  it('inlines a plain html-valued local (existing behaviour)', () => {
+    const src = component('const inner = html`<b>hi</b>`; return html`<div>${inner}</div>`;');
+    expect(parseComponent(src, 't.js', 'arc').template).toContain('<b>hi</b>');
+  });
+
+  it('resolves a ternary initializer, picking the branch matching the prop default', () => {
+    // The reported bug: the element vanished entirely because the initializer
+    // wasn't a bare `= html`…``.
+    const src = withDefaults(
+      'const field = this.multiline ? html`<textarea></textarea>` : html`<input/>`;\nreturn html`<div>${field}</div>`;',
+      'this.multiline = false;',
+      'multiline: { type: Boolean }'
+    );
+    const t = parseComponent(src, 't.js', 'arc').template;
+    expect(t).toContain('<input/>');
+    expect(t).not.toContain('<textarea>');
+  });
+
+  it('picks the truthy branch when the prop defaults true', () => {
+    const src = withDefaults(
+      'const field = this.multiline ? html`<textarea></textarea>` : html`<input/>`;\nreturn html`<div>${field}</div>`;',
+      'this.multiline = true;',
+      'multiline: { type: Boolean }'
+    );
+    const t = parseComponent(src, 't.js', 'arc').template;
+    expect(t).toContain('<textarea>');
+    expect(t).not.toContain('<input/>');
+  });
+
+  it('contributes nothing when the chosen branch has no markup', () => {
+    // `this.show ? html`…` : ''` with show defaulting false must not start
+    // emitting the element just because the initializer is now readable.
+    const src = withDefaults(
+      "const extra = this.show ? html`<b>shown</b>` : '';\nreturn html`<div>${extra}</div>`;",
+      'this.show = false;',
+      'show: { type: Boolean }'
+    );
+    const t = parseComponent(src, 't.js', 'arc').template;
+    expect(t).not.toContain('shown');
+    expect(t).not.toContain('${extra}');
+  });
+
+  it('resolves a condition held in a local alias', () => {
+    const src = withDefaults(
+      "const hasText = !!this.text;\nconst el = hasText ? html`<span>x</span>` : null;\nreturn html`<div>${el}</div>`;",
+      "this.text = '';",
+      'text: { type: String }'
+    );
+    expect(parseComponent(src, 't.js', 'arc').template).not.toContain('<span>x</span>');
+  });
+
+  it('leaves an undecidable condition unresolved for the downstream placeholder pass', () => {
+    // Collapsing this to '' would strip the interpolation the HTML generator
+    // needs in order to substitute a label for an otherwise-empty element.
+    const src = component(
+      "const content = this.src && this._state !== 'error' ? html`<img/>` : html`<b>x</b>`;\nreturn html`<div>${content}</div>`;"
+    );
+    expect(parseComponent(src, 't.js', 'arc').template).toContain('${content}');
+  });
+
+  it('ignores locals that hold no markup', () => {
+    const src = component('const id = this.name || this._fallback;\nreturn html`<div id=${id}></div>`;');
+    expect(parseComponent(src, 't.js', 'arc').template).toContain('${id}');
+  });
+
+  it('is not confused by a colon inside the branches', () => {
+    const src = withDefaults(
+      'const el = this.on ? html`<a href="https://x.example">y</a>` : html`<b style="color: red">n</b>`;\nreturn html`<div>${el}</div>`;',
+      'this.on = false;',
+      'on: { type: Boolean }'
+    );
+    const t = parseComponent(src, 't.js', 'arc').template;
+    expect(t).toContain('<b style="color: red">n</b>');
+    expect(t).not.toContain('href=');
+  });
+
+  it('re-indents a multi-line block to the interpolation column', () => {
+    const src = component(
+      'const field = html`<input\n          class="f"\n          type="text"\n        />`;\n' +
+      'return html`<div>\n  <span>\n    ${field}\n  </span>\n</div>`;'
+    );
+    const lines = parseComponent(src, 't.js', 'arc').template.split('\n');
+    const open = lines.findIndex((l) => l.includes('<input'));
+    // The opening tag and its attributes share one indentation level.
+    expect(lines[open].match(/^\s*/)[0]).toBe('    ');
+    expect(lines[open + 1].match(/^\s*/)[0]).toBe('      ');
+  });
+});

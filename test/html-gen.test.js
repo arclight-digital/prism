@@ -328,3 +328,76 @@ describe('generateHTML — complex templates', () => {
     });
   });
 });
+
+describe('attribute value resolution', () => {
+  const cfg = { outDir: 'html', prefix: 'arc', baseCSS: 'tokens.css', inlineVariant: false };
+  const render = (template, props) => {
+    const meta = { ...baseMeta, tag: 'arc-thing', pascalName: 'Thing', props, template };
+    const r = generateHTML(meta, cfg, tmpDir);
+    return readFileSync(r.results[0].path, 'utf-8');
+  };
+
+  it("a prop's own default outranks the generic attribute fallback", () => {
+    // type=${this.type} on a text field must not become type="button", which
+    // silently turns the example's input into a button.
+    const out = render('<input type=${this.type}/>', [
+      { name: 'type', type: 'String', default: "'text'", reflect: false, values: [] },
+    ]);
+    expect(out).toContain('type="text"');
+    expect(out).not.toContain('type="button"');
+  });
+
+  it('falls back to the generic default when the prop default is empty', () => {
+    const out = render('<a href=${this.href}>x</a>', [
+      { name: 'href', type: 'String', default: "''", reflect: false, values: [] },
+    ]);
+    expect(out).toContain('href="#"');
+    expect(out).not.toContain('href=""');
+  });
+
+  it('drops the attribute when neither a prop nor a generic default applies', () => {
+    const out = render('<input name=${this.name}/>', [
+      { name: 'name', type: 'String', default: "''", reflect: false, values: [] },
+    ]);
+    expect(out).not.toContain('name=');
+  });
+
+  it('still uses the generic default for an unresolvable expression', () => {
+    const out = render('<button type=${this._computedType()}>x</button>', []);
+    expect(out).toContain('type="button"');
+  });
+});
+
+describe('style attributes with unresolved interpolations', () => {
+  const cfg = { outDir: 'html', prefix: 'arc', baseCSS: 'tokens.css', inlineVariant: false };
+  const render = (template, props = []) => {
+    const meta = { ...baseMeta, tag: 'arc-thing', pascalName: 'Thing', props, template };
+    const r = generateHTML(meta, cfg, tmpDir);
+    return readFileSync(r.results[0].path, 'utf-8');
+  };
+
+  it('drops a style attribute rather than emitting a malformed declaration', () => {
+    // `--fill-percent: ${this._pct}%` would otherwise emit `style="--fill: %"`.
+    const out = render('<div class="bar" style="--fill: ${this._pct}%"></div>');
+    expect(out).not.toContain('style=');
+    expect(out).not.toContain(': %');
+    expect(out).toContain('class="bar"');
+  });
+
+  it('drops a multi-declaration style with an unresolved value', () => {
+    const out = render('<div style="position:absolute;top:${this._top}px;left:0"></div>');
+    expect(out).not.toContain('style=');
+  });
+
+  it('keeps a style whose interpolation resolves', () => {
+    const out = render('<div style="width: ${this.width}"></div>', [
+      { name: 'width', type: 'String', default: "'50%'", reflect: false, values: [] },
+    ]);
+    expect(out).toContain('style="width: 50%"');
+  });
+
+  it('leaves class untouched — a token list degrades harmlessly', () => {
+    const out = render('<div class="base ${this._extra}">x</div>');
+    expect(out).toContain('class="base ');
+  });
+});

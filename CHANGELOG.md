@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.2.1 — 2026-07-29
+
+### Fixed — HTML examples
+
+- **Elements built into a local before interpolation are no longer dropped.** A component that assembles part of its markup into a variable and interpolates it (`const field = this.multiline ? html`<textarea>` : html`<input>`; … ${field}`) lost that element entirely: the extractor only recognised `= html\`` directly after `=`, so the reference never resolved and the interpolation-dropping pass deleted it. `arc-input` generated a styled box containing no input at all. Initializers are now read in full, and a conditional one picks its branch from the condition's default — including conditions held in a local (`const hasText = !!this.text`). An undecidable condition is deliberately left unresolved rather than guessed, so an element that doesn't render by default is never invented.
+- **`style` attributes no longer emit malformed declarations.** An unresolved interpolation left broken CSS behind — `style="--fill-percent: %"`, `style="transform:scaleX()"`, `style="position:absolute;top:px;height:Item Heightpx;"`. `style` now takes real values only (never a human-readable placeholder, which is equally invalid: `width: Width`), and the whole attribute is dropped when nothing real resolves. Values that *can* resolve now do: `style="background-color:Color"` became `style="background-color:#4d7ef7"`. Token-list and free-text attributes (`class`, `aria-label`) are unaffected.
+- **A prop's own default outranks the generic attribute fallback.** `type=${this.type}` on a text field became `type="button"`, silently turning the example's input into a button. The referenced prop's default is now preferred, with the generic table used only when there isn't one — and an empty default falls through rather than emitting `href=""` (worse than `#`) or `name=""` (dropped outright).
+- **Multi-line blocks are re-indented to the interpolation's column.** Dedenting aligned the opening tag but left continuation lines at the variable declaration's original depth. `dedentTemplate` also no longer counts a first line that opens inline with its backtick, which pinned the common indent at 0 and dedented nothing.
+
 ## 2.2.0 — 2026-07-28
 
 ### Added

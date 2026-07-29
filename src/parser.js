@@ -86,8 +86,10 @@ export function parseComponent(source, filePath, prefix = 'arc', overrides = {})
   // Detect enum values from CSS :host([prop="value"]) patterns
   detectEnumValues(props, css);
 
-  // Parse template from render()
-  const template = extractTemplate(source);
+  // Parse template from render(). Defaults are needed to pick the branch of a
+  // conditionally-built element, so this must run after applyDefaults above.
+  const propDefaults = Object.fromEntries(props.map((p) => [p.name, p.default]));
+  const template = extractTemplate(source, propDefaults);
 
   // Parse custom events from dispatchEvent calls
   const events = extractEvents(source);
@@ -261,17 +263,21 @@ function detectEnumValues(props, css) {
 function dedentTemplate(str) {
   const lines = str.split('\n');
 
+  // The first line is measured separately: when a template opens inline with
+  // its backtick (html`<input\n  class="x"\n/>`) that line carries no
+  // indentation, and counting it would pin the common indent at 0 and dedent
+  // nothing — leaving every continuation line at its source depth.
   let minIndent = Infinity;
-  for (const line of lines) {
+  for (const line of lines.slice(1)) {
     if (line.trim().length === 0) continue;
     const spaces = line.match(/^(\s*)/)[1].length;
     if (spaces < minIndent) minIndent = spaces;
   }
   if (!isFinite(minIndent)) minIndent = 0;
 
-  const dedented = lines.map((line) => {
+  const dedented = lines.map((line, idx) => {
     if (line.trim().length === 0) return '';
-    return line.slice(minIndent);
+    return idx === 0 ? line : line.slice(minIndent);
   });
 
   // Trim leading/trailing blank lines
@@ -319,14 +325,183 @@ function extractTemplateLiteral(str, startIdx) {
   return { content, endIdx: i };
 }
 
+/** True if a prop's recorded default is truthy. Mirrors the HTML generator. */
+function isDefaultTruthy(defaults, prop) {
+  const d = defaults[prop];
+  if (d === undefined) return false;
+  return !['', 'false', '0', 'null', 'undefined', "''", '""'].includes(String(d).trim());
+}
+
+/**
+ * Read a declaration's initializer: everything from `=` to the terminating `;`,
+ * stepping over template literals, strings and bracket pairs so a `;` inside any
+ * of them doesn't end it early.
+ * @returns {{ text: string, endIdx: number }}
+ */
+function readInitializer(str, startIdx) {
+  let i = startIdx;
+  let depth = 0;
+  while (i < str.length) {
+    const ch = str[i];
+    if (ch === '`') { i = extractTemplateLiteral(str, i).endIdx + 1; continue; }
+    if (ch === "'" || ch === '"') {
+      const q = ch;
+      i++;
+      while (i < str.length && str[i] !== q) { if (str[i] === '\\') i++; i++; }
+      i++;
+      continue;
+    }
+    if (ch === '(' || ch === '[' || ch === '{') { depth++; i++; continue; }
+    if (ch === ')' || ch === ']' || ch === '}') { depth--; i++; continue; }
+    if (ch === ';' && depth === 0) break;
+    i++;
+  }
+  return { text: str.slice(startIdx, i), endIdx: i };
+}
+
+/** Advance past a string or template literal starting at `i`; else return null. */
+function skipLiteral(expr, i) {
+  const ch = expr[i];
+  if (ch === '`') return extractTemplateLiteral(expr, i).endIdx + 1;
+  if (ch === "'" || ch === '"') {
+    let j = i + 1;
+    while (j < expr.length && expr[j] !== ch) { if (expr[j] === '\\') j++; j++; }
+    return j + 1;
+  }
+  return null;
+}
+
+/**
+ * Split `cond ? A : B` into its parts, or null if `expr` isn't a ternary.
+ * Both delimiters are found by scanning rather than regex so a `?` or `:` inside
+ * a template, string, object literal or nested ternary doesn't split in the
+ * wrong place. `?.` and `??` are not ternary operators.
+ */
+function splitTernary(expr) {
+  const scan = (from, stopAt) => {
+    let i = from;
+    let depth = 0;
+    while (i < expr.length) {
+      const skipped = skipLiteral(expr, i);
+      if (skipped !== null) { i = skipped; continue; }
+      const ch = expr[i];
+      if (ch === '(' || ch === '[' || ch === '{') { depth++; i++; continue; }
+      if (ch === ')' || ch === ']' || ch === '}') { depth--; i++; continue; }
+      if (ch === '?' && expr[i + 1] === '?') { i += 2; continue; }
+      if (ch === '?' && expr[i + 1] === '.') { i += 2; continue; }
+      if (ch === '?') {
+        if (stopAt === '?' && depth === 0) return i;
+        depth++; // a nested ternary opens a level its own `:` closes
+        i++;
+        continue;
+      }
+      if (ch === ':') {
+        if (stopAt === ':' && depth === 0) return i;
+        depth--;
+        i++;
+        continue;
+      }
+      i++;
+    }
+    return -1;
+  };
+
+  const q = scan(0, '?');
+  if (q === -1) return null;
+  const c = scan(q + 1, ':');
+  if (c === -1) return null;
+  return {
+    cond: expr.slice(0, q),
+    whenTrue: expr.slice(q + 1, c),
+    whenFalse: expr.slice(c + 1),
+  };
+}
+
+/**
+ * Evaluate a ternary condition against prop defaults. Returns true/false, or
+ * null when it can't be decided — which callers must treat as "emit nothing"
+ * rather than guessing a branch, since inventing markup for a condition that is
+ * false by default puts an element in the example that never renders.
+ *
+ * Resolves `this.prop`, any number of leading `!`, and local aliases such as
+ * `const hasText = !!this.text` that components commonly compute first.
+ */
+function evalCondition(cond, defaults, locals, seen = new Set()) {
+  let t = cond.trim();
+  let negate = false;
+  while (t.startsWith('!')) { negate = !negate; t = t.slice(1).trim(); }
+
+  const prop = t.match(/^this\.(\w+)$/);
+  if (prop) {
+    const value = isDefaultTruthy(defaults, prop[1]);
+    return negate ? !value : value;
+  }
+
+  const local = t.match(/^(\w+)$/);
+  if (local && locals.has(local[1]) && !seen.has(local[1])) {
+    seen.add(local[1]);
+    const inner = evalCondition(locals.get(local[1]), defaults, locals, seen);
+    if (inner === null) return null;
+    return negate ? !inner : inner;
+  }
+
+  return null;
+}
+
+/** Content of the first top-level ``html`…` `` in an expression, or null. */
+function firstHtmlTemplate(expr) {
+  const m = expr.match(/\bhtml\s*`/);
+  if (!m) return null;
+  return extractTemplateLiteral(expr, m.index + m[0].length - 1).content;
+}
+
+/**
+ * Resolve a declaration initializer to the markup it contributes.
+ *
+ * Returns the template content, `''` when the selected branch contributes no
+ * markup, or null when the initializer has nothing to do with html.
+ */
+function resolveInitializer(init, defaults, locals) {
+  const ternary = splitTernary(init);
+  if (!ternary) return firstHtmlTemplate(init);
+
+  // Nothing to contribute if the initializer has no markup at all.
+  const anyHtml = firstHtmlTemplate(init);
+  if (anyHtml === null) return null;
+
+  // A branch is chosen by the condition's default, so
+  // `this.multiline ? html`<textarea>` : html`<input>`` yields the input when
+  // `multiline` defaults false, and `this.show ? html`…` : ''` yields nothing.
+  //
+  // An undecidable condition resolves to nothing at all — not an empty string.
+  // Leaving the reference unresolved hands it back to the interpolation pass,
+  // which already substitutes a placeholder or the component label for an
+  // otherwise-empty element. Collapsing it to '' here would suppress that and
+  // leave a blank element behind.
+  const decided = evalCondition(ternary.cond, defaults, locals);
+  if (decided === null) return null;
+
+  const content = firstHtmlTemplate(decided ? ternary.whenTrue : ternary.whenFalse);
+  return content === null ? '' : content;
+}
+
 /**
  * Extract template HTML from render() method.
  * Handles patterns like:
  *   const inner = html`<div>...</div>`;
  *   return html`<wrapper>${inner}</wrapper>`;
  * by inlining the variable template into the final return template.
+ *
+ * The initializer doesn't have to be a bare template — a component that builds
+ * an element conditionally (`const field = this.multiline ? html`…` : html`…``)
+ * is resolved against prop defaults. Without that the reference can't be
+ * resolved, and the interpolation-dropping pass deletes the element outright,
+ * leaving a styled wrapper with nothing inside it.
+ *
+ * @param {string} source - file contents
+ * @param {Record<string, string>} [defaults={}] - prop name → default, for ternaries
  */
-function extractTemplate(source) {
+function extractTemplate(source, defaults = {}) {
   // Find `render() {` and use brace-matching to extract the full method body
   const renderStart = source.match(/render\s*\(\s*\)\s*\{/);
   if (!renderStart) return '';
@@ -366,14 +541,23 @@ function extractTemplate(source) {
 
   const body = source.slice(openBraceIdx + 1, i - 1);
 
-  // Collect variable assignments: const/let/var name = html`...`
+  // Collect variable assignments whose initializer produces markup. The whole
+  // initializer is read rather than requiring `= html\`` directly, so a template
+  // built through a conditional is still resolvable.
   const varTemplates = new Map();
-  const varPattern = /(?:const|let|var)\s+(\w+)\s*=\s*html`/g;
+  // Every declaration is recorded, not just the markup-producing ones: a
+  // template's condition is often a local computed a line earlier
+  // (`const hasText = !!this.text`), and resolving it needs that binding.
+  const locals = new Map();
+  const varPattern = /(?:const|let|var)\s+(\w+)\s*=/g;
   let varMatch;
   while ((varMatch = varPattern.exec(body)) !== null) {
-    const backtickIdx = varMatch.index + varMatch[0].length - 1;
-    const { content } = extractTemplateLiteral(body, backtickIdx);
-    varTemplates.set(varMatch[1], content);
+    const init = readInitializer(body, varMatch.index + varMatch[0].length);
+    locals.set(varMatch[1], init.text);
+    const content = resolveInitializer(init.text, defaults, locals);
+    if (content !== null) varTemplates.set(varMatch[1], content);
+    // Resume past the initializer so its internals aren't rescanned.
+    varPattern.lastIndex = init.endIdx;
   }
 
   // Find return html`...` — prefer the last return statement (default branch)
@@ -402,9 +586,16 @@ function extractTemplate(source) {
   // Use the last return template (typically the non-conditional / default branch)
   let template = returnTemplates[returnTemplates.length - 1];
 
-  // Inline variable templates: replace ${varName} with the variable's dedented html content
+  // Inline variable templates: replace ${varName} with the variable's dedented
+  // html content. A multi-line block is re-indented to the interpolation's own
+  // column first — dedenting alone aligns the opening tag but leaves every
+  // continuation line at the variable declaration's original indentation.
   for (const [name, content] of varTemplates) {
     const dedented = dedentTemplate(content);
+    template = template.replace(
+      new RegExp(`^([ \\t]*)\\$\\{${name}\\}`, 'gm'),
+      (_m, indent) => indent + dedented.split('\n').join('\n' + indent)
+    );
     template = template.replace(new RegExp(`\\$\\{${name}\\}`, 'g'), dedented);
   }
 
