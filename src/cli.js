@@ -165,6 +165,34 @@ function processFile(filePath, config) {
     });
   }
 
+  // Named slots the generated wrapper cannot carry. Svelte intercepts
+  // `slot="start"` on a component's child and routes it to a snippet prop the
+  // wrapper doesn't declare, so the content is dropped outright — build clean,
+  // typecheck clean, nothing rendered. Vue forwards only the default slot, so
+  // `<template #start>` is lost while a `<div slot="start">` child still works
+  // (Vue 3 dropped `slot` as syntax, so it passes through as an attribute).
+  // React, Preact, Solid and Angular are unaffected: none of them treat `slot`
+  // as anything but an attribute.
+  if (meta.slots.length > 0) {
+    const affected = ['svelte', 'vue'].filter((f) => config[f]);
+    if (affected.length > 0) {
+      diagnostics.push({
+        code: 'named-slots-dropped',
+        message:
+          `${meta.tag} exposes named slot(s) ${meta.slots.map((s) => `"${s}"`).join(', ')} that the ` +
+          `${affected.join(' and ')} wrapper cannot receive` +
+          (affected.includes('svelte')
+            ? ' — Svelte routes `slot="…"` on a component child to a snippet prop, and the wrapper renders only the default children, so that content is dropped silently'
+            : ' — the wrapper forwards only the default slot, so `<template #name>` content is dropped') +
+          '. Use the custom element directly for these, or keep a hand-written wrapper.',
+        file: filePath,
+        tag: meta.tag,
+        slots: meta.slots,
+        frameworks: affected,
+      });
+    }
+  }
+
   const componentsDir = join(root, config.components);
 
   // React wrapper
@@ -427,6 +455,7 @@ function warnUnmatchedOverrides(metas, config) {
  */
 function flushDiagnostics(config) {
   const LABELS = {
+    'named-slots-dropped': 'components whose named-slot content the wrapper drops',
     'framework-reserved': 'prop names a framework reserves — silently dropped at runtime',
     'doc-drift': 'documented @prop unions contradicted by the CSS or the default',
     'unportable-doc-type': 'documented @prop types naming symbols prism cannot import',

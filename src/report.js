@@ -87,6 +87,7 @@ export function formatBytes(n) {
  * @param {import('./parser.js').Diagnostic[]} diagnostics
  */
 export const STRICT_CODES = [
+  'named-slots-dropped',
   'framework-reserved',
   'doc-drift',
   'unmatched-override',

@@ -1038,3 +1038,59 @@ describe('documented type rejections name their cause', () => {
     expect(diagnostics[0].message).toContain('generated wrappers take no imports');
   });
 });
+
+describe('named slots', () => {
+  const parse = (renderBody) => parseComponent(`
+    /** @tag arc-toolbar */
+    export class ArcToolbar extends LitElement {
+      render() { return html\`${renderBody}\`; }
+    }
+  `, '/src/application/toolbar.js', prefix);
+
+  it('records named slots in template order', () => {
+    const meta = parse(`
+      <div class="bar">
+        <slot name="start"></slot>
+        <div class="context"></div>
+        <slot name="end"></slot>
+      </div>
+    `);
+    expect(meta.slots).toEqual(['start', 'end']);
+    expect(meta.hasDefaultSlot).toBe(false);
+  });
+
+  it('detects a default slot alongside named ones', () => {
+    const meta = parse('<slot name="start"></slot><slot></slot>');
+    expect(meta.slots).toEqual(['start']);
+    expect(meta.hasDefaultSlot).toBe(true);
+  });
+
+  it('reports no named slots for a plain default slot', () => {
+    const meta = parse('<button><slot></slot></button>');
+    expect(meta.slots).toEqual([]);
+    expect(meta.hasDefaultSlot).toBe(true);
+  });
+
+  it('does not mistake a slot with fallback content for a default slot', () => {
+    const meta = parse('<slot name="icon"><arc-icon name="x"></arc-icon></slot>');
+    expect(meta.slots).toEqual(['icon']);
+    expect(meta.hasDefaultSlot).toBe(false);
+  });
+
+  it('handles single quotes and extra attributes', () => {
+    const meta = parse("<slot part=\"s\" name='start'></slot>");
+    expect(meta.slots).toEqual(['start']);
+  });
+
+  it('deduplicates a slot named twice', () => {
+    const meta = parse('<slot name="start"></slot><slot name="start"></slot>');
+    expect(meta.slots).toEqual(['start']);
+  });
+
+  it('records names that are not valid identifiers verbatim', () => {
+    // `icon-left` is a legal slot name but cannot be a Svelte snippet prop —
+    // recording it as-is leaves that decision to the generator.
+    const meta = parse('<slot name="icon-left"></slot>');
+    expect(meta.slots).toEqual(['icon-left']);
+  });
+});

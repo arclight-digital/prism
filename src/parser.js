@@ -27,6 +27,8 @@
  * @property {string} template - raw HTML string from render()
  * @property {string[]} events - custom event names
  * @property {Record<string, string[]>} eventDetails - event name → keys of its `detail` object
+ * @property {string[]} slots - named slots the component exposes, in template order
+ * @property {boolean} hasDefaultSlot - whether it also has an unnamed <slot>
  * @property {'static'|'hybrid'|'interactive'} interactivity - how much JS the component needs
  * @property {string} hostDisplay - CSS display value from :host (e.g. 'block', 'inline-flex')
  */
@@ -138,9 +140,13 @@ export function parseComponent(source, filePath, prefix = 'arc', overrides = {},
   // Extract host display value from :host { display: ... }
   const hostDisplay = extractHostDisplay(css);
 
+  // Named slots. Nothing recorded these before, so every wrapper projected a
+  // single anonymous child list and named-slot content had nowhere to go.
+  const { slots, hasDefaultSlot } = extractSlots(template);
+
   return {
     tag, className, pascalName, tier, props, css, template, events, eventDetails,
-    interactivity, classification, hostDisplay,
+    slots, hasDefaultSlot, interactivity, classification, hostDisplay,
   };
 }
 
@@ -808,6 +814,28 @@ function extractTemplate(source, defaults = {}) {
   }
 
   return template;
+}
+
+/**
+ * Named slots a component exposes, in template order, and whether it also has
+ * an unnamed default slot.
+ *
+ * A slot name is legal HTML but not necessarily a legal identifier — `slot="a-b"`
+ * is common and can't be a Svelte snippet prop — so names are recorded verbatim
+ * and it's the consumer's job to decide what it can do with each one.
+ *
+ * @param {string} template
+ * @returns {{ slots: string[], hasDefaultSlot: boolean }}
+ */
+function extractSlots(template) {
+  const named = new Set();
+  for (const m of template.matchAll(/<slot\b[^>]*?\bname\s*=\s*["']([^"']+)["']/g)) {
+    named.add(m[1]);
+  }
+  // A `<slot>` with no name attribute anywhere in its tag is the default slot.
+  const hasDefaultSlot = [...template.matchAll(/<slot\b([^>]*)>/g)]
+    .some((m) => !/\bname\s*=/.test(m[1]));
+  return { slots: [...named], hasDefaultSlot };
 }
 
 /**
