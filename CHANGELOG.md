@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.5.0 — unreleased
+## 2.5.0 — 2026-07-29
 
 ### Fixed
 
