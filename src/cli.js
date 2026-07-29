@@ -135,16 +135,24 @@ function processFile(filePath, config) {
   // isn't a finding for a project that doesn't emit React wrappers.
   const enabled = ['react', 'vue', 'svelte', 'angular', 'solid', 'preact'].filter((f) => config[f]);
   for (const { prop, frameworks } of reservedCollisions(meta.props, enabled)) {
+    // The remedy is an alias, not a rename. The prop works everywhere else, so
+    // renaming it would break every working consumer to fix the broken ones —
+    // adding a second name the component falls back to breaks nobody.
+    const unaffected = enabled.filter((f) => !frameworks.includes(f));
+    const stillWorks = unaffected.length > 0
+      ? ` It still works in ${unaffected.join(', ')}, so prefer adding an alias prop the component falls back to over renaming.`
+      : '';
     diagnostics.push({
       code: 'framework-reserved',
       message:
         `${meta.tag} prop "${prop}" is reserved by ${frameworks.join(', ')} — ` +
         'it is intercepted before the component sees it, so the prop silently ' +
-        'does nothing. Rename it on the component; prism cannot work around it.',
+        `does nothing there.${stillWorks} Prism cannot work around this in the wrapper.`,
       file: filePath,
       tag: meta.tag,
       prop,
       frameworks,
+      unaffected,
     });
   }
 

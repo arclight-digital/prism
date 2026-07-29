@@ -43,8 +43,11 @@ export function safeIdent(name, taken = new Set()) {
  * certain rather than hypothetical.
  *
  * Prism cannot fix this in the wrapper: the value is taken before the component
- * function is called. The only remedy is renaming the prop at source, so all
- * prism can do is say so.
+ * function is called, so no generated code can recover it. All prism can do is
+ * report it — and report it as an alias, not a rename. The prop works today in
+ * HTML and in every framework absent from this list, so renaming it would break
+ * the working consumers to fix the broken ones. A second name the component
+ * falls back to (`col.field ?? col.key`) breaks nobody.
  *
  * The `children` entries are a different mechanism with the same cause — those
  * generators inject their own `children` member, so a prop of that name

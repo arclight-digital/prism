@@ -96,9 +96,11 @@ Prism reports what it couldn't act on, but a caller that pipes stdout and only s
 
 ```
 1 prop names a framework reserves — silently dropped at runtime:
-  arc-column prop "key" is reserved by react — it is intercepted before the
-  component sees it, so the prop silently does nothing. Rename it on the
-  component; prism cannot work around it.
+  arc-column prop "key" is reserved by react, preact — it is intercepted
+  before the component sees it, so the prop silently does nothing there.
+  It still works in vue, svelte, angular, solid, so prefer adding an alias
+  prop the component falls back to over renaming. Prism cannot work around
+  this in the wrapper.
 
 prism: --strict — 1 issue(s) reported above.
 ```
@@ -115,7 +117,16 @@ This is deliberately narrower than a blanket `[key: string]: unknown`, which acc
 
 ### Prop names your framework reserves
 
-Some prop names are legal everywhere but never reach the component. React and Preact take `key` and `ref` in the reconciler, so `<Column key="name" />` sets the list key and the prop is silently dropped — no error, no warning, and `key=` is exactly what you write by reflex on something that renders in a list. Prism can't fix this in the wrapper (the value is taken before the component function is called), so it reports the collision and you rename the prop on the component. Checked per framework, and only for frameworks you actually generate.
+Some prop names are legal everywhere but never reach the component. React and Preact take `key` and `ref` in the reconciler, so `<Column key="name" />` sets the list key and the prop is silently dropped — no error, no warning, and `key=` is exactly what you write by reflex on something that renders in a list. Prism can't fix this in the wrapper: the value is taken before the component function is called, so no generated code can recover it. All it can do is report the collision. Checked per framework, and only for frameworks you actually generate.
+
+**Prefer an alias to a rename.** The prop still works in plain HTML and in every framework not named in the warning, so renaming it breaks those consumers to fix the ones that were already broken. Adding a second name the component falls back to breaks nobody:
+
+```js
+// arc-column gains `field`; `key` keeps working everywhere it already did
+const name = col.field ?? col.key;
+```
+
+React and Preact users pass `field`; everyone else can carry on. Deprecate the original later, or never.
 
 ## Configuration
 
