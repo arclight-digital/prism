@@ -26,14 +26,9 @@ export function shadowToLight(css, tag) {
   //
   //   slot[name="x"]::slotted(SEL) → SEL[slot="x"]   (or [slot="x"] for `*`)
   //   slot::slotted(SEL)           → SEL
+  //   .btn-slot::slotted(SEL)      → SEL
   //   ::slotted(SEL)               → SEL
-  result = result.replace(
-    /slot\[name=(['"])([^'"]+)\1\]::slotted\(\s*([^)]+?)\s*\)/g,
-    (_m, _q, slotName, sel) =>
-      sel.trim() === '*' ? `[slot="${slotName}"]` : `${sel.trim()}[slot="${slotName}"]`
-  );
-  result = result.replace(/slot::slotted\(\s*([^)]+?)\s*\)/g, '$1');
-  result = result.replace(/::slotted\(\s*([^)]+?)\s*\)/g, '$1');
+  result = rewriteSlotted(result);
 
   // --- :host(<compound>) with multiple parts, e.g. :host(:not([href]):not([interactive])) ---
   // Must come first: the single-part rules below can't match multi-part compounds,
@@ -131,6 +126,79 @@ export function shadowToLight(css, tag) {
 /** Escape a string for safe use inside a RegExp. */
 function escapeRegExp(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Trailing compound selector that `::slotted()` hangs off — the slot's own
+ * selector. Anchored at the end of the preceding text so it consumes whole
+ * tokens: `.btn-slot` is eaten as one class, never sliced into `.btn-` + `slot`.
+ */
+const SLOT_COMPOUND_RE = /(?:[.#]?[\w-]+|\[[^\]]*\])*$/;
+
+/** `[name="x"]` / `[name=x]` inside a slot compound. */
+const SLOT_NAME_RE = /\[name=(['"]?)([^'"\]]+)\1\]/;
+
+/**
+ * Rewrite every `::slotted(...)` to its flattened light-DOM form.
+ *
+ * `::slotted()` is only valid attached to a `<slot>`, so whatever compound
+ * precedes it *is* the slot's selector by construction — `slot`, `slot[name=x]`
+ * or a class the component put on its slot (`.btn-slot`). The slot element
+ * itself has no light-DOM counterpart, so that compound is dropped and only the
+ * projected-node selector survives; a named slot re-attaches as `[slot="x"]`.
+ *
+ * Scans rather than pattern-matches the argument so one level of nesting
+ * (`::slotted(:not(:first-child))`) doesn't terminate at the inner `)`, and
+ * steps over `/* … *\/` spans so prose that merely *mentions* a selector is
+ * copied through instead of being rewritten into nonsense.
+ */
+function rewriteSlotted(css) {
+  const TOKEN = '::slotted(';
+  let out = '';
+  let i = 0; // start of the run not yet copied to `out`
+  let at = 0; // scan cursor
+
+  while (at < css.length) {
+    if (css[at] === '/' && css[at + 1] === '*') {
+      const end = css.indexOf('*/', at + 2);
+      at = end === -1 ? css.length : end + 2;
+      continue;
+    }
+    if (!css.startsWith(TOKEN, at)) {
+      at++;
+      continue;
+    }
+
+    // Find the matching `)` for the argument list.
+    let depth = 1;
+    let j = at + TOKEN.length;
+    for (; j < css.length && depth > 0; j++) {
+      if (css[j] === '(') depth++;
+      else if (css[j] === ')') depth--;
+    }
+    // Unbalanced — bail out and pass the remainder through untouched rather
+    // than emitting a mangled selector.
+    if (depth !== 0) break;
+
+    const sel = css.slice(at + TOKEN.length, j - 1).trim();
+    const before = css.slice(i, at);
+    const compound = before.match(SLOT_COMPOUND_RE)[0];
+
+    const named = compound.match(SLOT_NAME_RE);
+    let replacement;
+    if (named) {
+      const slotName = named[2];
+      replacement = !sel || sel === '*' ? `[slot="${slotName}"]` : `${sel}[slot="${slotName}"]`;
+    } else {
+      replacement = sel || '*';
+    }
+
+    out += before.slice(0, before.length - compound.length) + replacement;
+    i = j;
+    at = j;
+  }
+
+  return out + css.slice(i);
 }
 
 /**

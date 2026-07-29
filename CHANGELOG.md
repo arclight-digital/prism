@@ -1,6 +1,21 @@
 # Changelog
 
-## 2.0.5 — 2026-07-23
+## 2.1.0 — 2026-07-28
+
+### Added
+
+- **`config.interactivity` — durable classification overrides.** A new config map pins a component's interactivity level by tag: `{ 'arc-tab': 'interactive', 'arc-tooltip': 'hybrid' }`. It takes precedence over the `@arc-prism` JSDoc tag, which still works. The tag lives in a doc comment, so any pass that rewrites doc comments can silently drop it and take the classification with it — that has happened twice, most recently losing four child-component tags in the arc-ui DX release. Config is data codegen never touches. It also fails loudly where the tag fails silently: an unknown level or malformed tag key throws at config load, and a key matching no component warns on every run, so a renamed or deleted component can't quietly lose its override.
+- **Stale-output detection and `--prune`.** Prism now reports generated files it can no longer produce, and deletes them with `--prune`. Two cases: a component reclassified to `interactive` stops producing HTML/CSS, and a deleted component stops producing everything — including wrappers in all six framework targets, which nothing ever revisited. Reporting is the default because these files are by definition unreproducible; deletion is opt-in. Only files carrying prism's generated header are removed, so hand-written files at a generated path are never touched, and barrels and the CSS bundle are never candidates. (Cleared 141 stale files in arc-ui, ~50 KB shipping in the package.)
+
+### Fixed
+
+- **`::slotted()` no longer corrupts class names ending in `slot`.** The `slot::slotted(SEL)` rule wasn't anchored to a selector boundary, so any class whose name ended in `slot` contained the literal substring and lost it: `.btn-slot::slotted(a)` became `.btn-a`, `.card-slot::slotted(a)` became `.card-a`. The rewrite is now boundary-aware and consumes the slot's whole compound selector — `slot`, `slot[name="x"]`, or a class the component put on its slot — since `::slotted()` is only valid attached to a `<slot>`. Attribute-selector `::slotted([slot="prefix"])` and named-slot mapping are unchanged. Nested parens in the argument (`::slotted(:not(:first-child))`) are also now scanned rather than pattern-matched, instead of working by accident.
+- **`@focusin` / `@focusout` are detected as interactive.** The event-binding pattern matched `@focus\s*=`, which can't span the `in`/`out` suffix, so a component whose only handler was `@focusin` was classified static and shipped CSS for behaviour it couldn't perform without JS.
+- **The CSS transform no longer rewrites selectors inside comments.** Prose that merely mentioned a selector (`/* pair .btn with .btn-slot::slotted(a) … */`) was rewritten as if it were code.
+
+### Changed
+
+- `prism.config.js` in this repo is now `prism.config.example.js`. It described a consumer's directory layout, was never loaded (prism resolves config from the directory it runs in) and was never published — but read as authoritative.
 
 ### Fixed
 

@@ -4,7 +4,8 @@
  * Auto-generate React wrappers and HTML/CSS from Lit web components.
  *
  * Usage:
- *   prism                          # Generate all
+ *   prism                          # Generate all (reports stale output)
+ *   prism --prune                  # Generate all, delete stale output
  *   prism --watch                  # Watch mode
  *   prism --config ./my.config.js  # Custom config
  *   prism path/to/component.js     # Single component
@@ -22,6 +23,7 @@ import { generateSolid } from './generators/solid.js';
 import { generatePreact } from './generators/preact.js';
 import { generateHTML } from './generators/html.js';
 import { generateCSS, generateCSSBundle } from './generators/css.js';
+import { sweepOrphans } from './generators/prune.js';
 import {
   updateWCBarrel,
   updateReactTierBarrel,
@@ -44,14 +46,28 @@ const args = process.argv.slice(2);
 let watchMode = false;
 let configPath = null;
 let singleFile = null;
+// Stale output is reported but kept unless --prune is passed. Prism can no
+// longer regenerate these files (that is what makes them stale), so deleting
+// them is irreversible outside version control — too destructive to be implicit.
+let prune = false;
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--watch' || args[i] === '-w') {
     watchMode = true;
+  } else if (args[i] === '--prune') {
+    prune = true;
   } else if (args[i] === '--config' || args[i] === '-c') {
     configPath = args[++i];
   } else if (args[i] && !args[i].startsWith('-')) {
     singleFile = args[i];
+  }
+}
+
+/** Report stale/removed paths from a generator result. */
+function reportStale(paths, removedPaths) {
+  for (const p of paths) {
+    const done = removedPaths.includes(p);
+    console.log(`  ${done ? 'pruned' : 'stale'}: ${relative(root, p)}${done ? '' : ' (run with --prune to remove)'}`);
   }
 }
 
@@ -91,7 +107,7 @@ function discoverComponents(config) {
 // ── Process a single component file ─────────────────────────
 function processFile(filePath, config) {
   const source = readFileSync(filePath, 'utf-8');
-  const meta = parseComponent(source, filePath, config.prefix);
+  const meta = parseComponent(source, filePath, config.prefix, config.interactivity);
 
   if (!meta) {
     console.log(`  skip: ${relative(root, filePath)} (no component found)`);
@@ -162,9 +178,10 @@ function processFile(filePath, config) {
 
   // HTML example files
   if (config.html) {
-    const htmlOut = generateHTML(meta, config.html, root);
+    const htmlOut = generateHTML(meta, config.html, root, { prune });
     if (htmlOut.skipped) {
       console.log(`  skip: ${meta.tag.replace(new RegExp('^' + config.prefix + '-'), '')} (interactive — use WC or React import)`);
+      reportStale(htmlOut.stale, htmlOut.removed);
     } else {
       const hybridTag = meta.interactivity === 'hybrid' ? ' (hybrid)' : '';
       for (const r of htmlOut.results) {
@@ -179,8 +196,10 @@ function processFile(filePath, config) {
 
   // Per-component CSS files
   if (config.css) {
-    const cssOut = generateCSS(meta, config.css, root);
-    if (!cssOut.skipped) {
+    const cssOut = generateCSS(meta, config.css, root, { prune });
+    if (cssOut.skipped) {
+      reportStale(cssOut.stale, cssOut.removed);
+    } else {
       for (const r of cssOut.results) {
         if (r.written) {
           console.log(`  css:   ${relative(root, r.path)}`);
@@ -294,6 +313,33 @@ function processFile(filePath, config) {
   return meta;
 }
 
+/**
+ * Warn about `config.interactivity` keys that matched no component. A renamed
+ * or deleted component silently drops its override otherwise — the entry just
+ * sits in the config looking authoritative while auto-detection quietly decides
+ * instead. Needs the full component set, so it runs alongside the sweep.
+ */
+function warnUnmatchedOverrides(metas, config) {
+  const seen = new Set(metas.map((m) => m.tag));
+  for (const tag of Object.keys(config.interactivity)) {
+    if (!seen.has(tag)) {
+      console.warn(`prism: config.interactivity has "${tag}" but no such component was found`);
+    }
+  }
+}
+
+/**
+ * Remove output for components that no longer exist. Safe only with the full
+ * component set — never call this from single-file mode, where every component
+ * except one would look deleted.
+ */
+function runSweep(metas, config) {
+  const { stale, removed } = sweepOrphans(metas, config, root, { apply: prune });
+  if (stale.length === 0) return;
+  console.log(prune ? '\nRemoved orphaned output:' : '\nOrphaned output (no matching component):');
+  reportStale(stale, removed);
+}
+
 // ── Main ────────────────────────────────────────────────────
 async function main() {
   const config = normalizeConfig(await loadConfig());
@@ -324,6 +370,11 @@ async function main() {
       }
     }
 
+    if (allMetas.length > 0) {
+      warnUnmatchedOverrides(allMetas, config);
+      runSweep(allMetas, config);
+    }
+
     console.log('\nWatching for changes...');
 
     const { watch } = await import('chokidar');
@@ -333,17 +384,23 @@ async function main() {
       { ignoreInitial: true }
     );
 
-    const rebuildBundle = () => {
-      if (!config.css) return;
+    // Re-discovers every component, so it doubles as the place to reconcile
+    // orphaned output — the only point in watch mode with a complete meta set.
+    const rebuildBundle = ({ sweep = false } = {}) => {
       const currentFiles = discoverComponents(config);
       const metas = currentFiles
-        .map((f) => parseComponent(readFileSync(f, 'utf-8'), f, config.prefix))
+        .map((f) => parseComponent(readFileSync(f, 'utf-8'), f, config.prefix, config.interactivity))
         .filter(Boolean);
-      if (metas.length > 0) {
+      if (metas.length === 0) return;
+      if (config.css) {
         const bundleResults = generateCSSBundle(metas, config.css, root);
         for (const r of bundleResults) {
           console.log(`  bundle: ${relative(root, r.path)}`);
         }
+      }
+      if (sweep) {
+        warnUnmatchedOverrides(metas, config);
+        runSweep(metas, config);
       }
     };
 
@@ -366,15 +423,15 @@ async function main() {
     watcher.on('change', (filePath) => handleChange('Changed', filePath));
     watcher.on('add', (filePath) => handleChange('New', filePath));
 
-    // Removing a component leaves orphaned wrappers, but the CSS bundle must at
-    // least be rebuilt so the deleted component's styles drop out of it.
+    // Removing a component drops its styles from the rebuilt bundle and leaves
+    // its per-framework wrappers orphaned — sweep so both stay in step.
     watcher.on('unlink', (filePath) => {
       const rel = relative(root, filePath);
       const fileName = filePath.split(/[/\\]/).pop();
       if (isIgnored(fileName, filePath, config.ignore)) return;
       console.log(`\nRemoved: ${rel}`);
       try {
-        rebuildBundle();
+        rebuildBundle({ sweep: true });
       } catch (err) {
         console.error(`  error rebuilding bundle: ${err.message}`);
       }
@@ -405,7 +462,12 @@ async function main() {
       console.log('');
     }
 
-    console.log('Done.');
+    if (allMetas.length > 0) {
+      warnUnmatchedOverrides(allMetas, config);
+      runSweep(allMetas, config);
+    }
+
+    console.log('\nDone.');
   }
 }
 

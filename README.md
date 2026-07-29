@@ -80,13 +80,16 @@ npx prism path/to/button.js
 
 # Use a custom config path
 npx prism --config ./custom.config.js
+
+# Delete generated output that no longer has a source component
+npx prism --prune
 ```
 
 All flags also have short forms: `-w` for `--watch`, `-c` for `--config`.
 
 ## Configuration
 
-Create a `prism.config.js` in your project root. Every section except `components` and `tiers` is optional — include only the outputs you need:
+Create a `prism.config.js` in your project root. Every section except `components` and `tiers` is optional — include only the outputs you need. A complete, copyable starting point ships as [`prism.config.example.js`](prism.config.example.js):
 
 ```js
 export default {
@@ -155,6 +158,7 @@ export default {
 | `components` | `string` | *required* | Root directory containing Lit component source files |
 | `tiers` | `string[]` | *required* | Subdirectories within `components` to scan (e.g. `['content', 'reactive']`) |
 | `ignore` | `string[]` | `[]` | Patterns to skip — bare filenames (`index.js`), prefixed (`**/index.js`), or directory globs (`**/icons/**`) |
+| `interactivity` | `Record<string, 'static'\|'hybrid'\|'interactive'>` | `{}` | Per-tag classification overrides. Highest precedence — see [Interactivity detection](#interactivity-detection) |
 
 ### Framework options
 
@@ -211,7 +215,7 @@ All components get framework wrappers regardless of interactivity level. The cla
 
 Prism looks for these signals in the source:
 
-- `@click=`, `@input=`, `@change=`, etc. in template &rarr; **interactive**
+- `@click=`, `@input=`, `@change=`, `@focusin=`, etc. in template &rarr; **interactive**
 - `dispatchEvent(new CustomEvent(...))` &rarr; **interactive**
 - `this.shadowRoot.querySelector` &rarr; **interactive**
 - `:host { display: none }` &rarr; **interactive**
@@ -221,7 +225,37 @@ Auto-detection is binary (static or interactive). The **hybrid** level requires 
 
 ### Manual overrides
 
-Add an `@arc-prism` JSDoc tag to the class comment:
+Classification is resolved in three layers, highest precedence first:
+
+| Layer | Source | Notes |
+|---|---|---|
+| 0 | `config.interactivity` | **Preferred.** Durable — config is never machine-rewritten |
+| 1 | `@arc-prism` JSDoc tag | Supported for back-compat |
+| 2 | Auto-detection | Binary only (static or interactive) |
+
+#### `config.interactivity` (preferred)
+
+```js
+// prism.config.js
+export default {
+  interactivity: {
+    'arc-tab':        'interactive',  // child of arc-tabs
+    'arc-code-block': 'hybrid',       // display works; copy needs JS
+  },
+};
+```
+
+Prefer this over the JSDoc tag. A tag lives in a doc comment, and any pass that
+rewrites doc comments can silently drop it — taking the classification with it.
+The config file is data that codegen never touches.
+
+It also fails loudly rather than silently:
+
+- an unknown level or malformed tag key **throws** at config load
+- a key matching no component **warns** on every run, so a renamed or deleted
+  component can't quietly lose its override
+
+#### `@arc-prism` JSDoc tag
 
 ```js
 /**
@@ -231,7 +265,23 @@ Add an `@arc-prism` JSDoc tag to the class comment:
 class ArcCodeBlock extends LitElement { ... }
 ```
 
-Valid values: `static`, `hybrid`, `interactive`. The override is checked before auto-detection, so it always wins.
+Valid values: `static`, `hybrid`, `interactive`. Still fully supported, but note
+that a *malformed* tag is inert — it neither throws nor warns, it just falls
+through to auto-detection. `config.interactivity` has no such failure mode.
+
+### Stale output
+
+A component that becomes `interactive` stops producing HTML/CSS, and a deleted
+component stops producing everything. Prism reports both on every run and
+removes them with `--prune`:
+
+```
+Orphaned output (no matching component):
+  stale: packages/html/css/ghost.css (run with --prune to remove)
+```
+
+Only files carrying prism's generated header are ever removed — hand-written
+files at a generated path are left alone.
 
 ## CSS transformation
 

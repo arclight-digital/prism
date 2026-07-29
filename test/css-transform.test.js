@@ -217,3 +217,109 @@ describe('shadowToLight', () => {
     expect(comment).not.toContain('.arc-qr-code');
   });
 });
+
+describe('shadowToLight — ::slotted', () => {
+  it('drops a class-on-slot compound without slicing the class name', () => {
+    // Regression: `.btn-slot::slotted(a)` contains the literal substring
+    // `slot::slotted(`, so an unanchored rule ate the trailing `slot` and
+    // produced `.arc-button .btn-a`.
+    const result = shadowToLight('.btn-slot::slotted(a) { color: red; }', tag);
+    expect(result).toContain('.arc-button a { color: red; }');
+    expect(result).not.toContain('.btn-a');
+    expect(result).not.toContain('.btn-slota');
+  });
+
+  it('drops a class-on-slot compound under a :host() prefix', () => {
+    const result = shadowToLight(
+      ':host([size="xs"]) .btn-slot::slotted(a) { width: 28px; }',
+      'arc-icon-button'
+    );
+    expect(result).toContain('.arc-icon-button[data-size="xs"] a { width: 28px; }');
+    expect(result).not.toContain('btn-a');
+  });
+
+  it('leaves an unrelated class ending in "slot" alone', () => {
+    const result = shadowToLight('.btn-slot { display: contents; }', tag);
+    expect(result).toContain('.arc-button .btn-slot');
+  });
+
+  it('bare slot element → projected selector', () => {
+    const result = shadowToLight('slot::slotted(a) { color: red; }', tag);
+    expect(result).toContain('.arc-button a { color: red; }');
+  });
+
+  it('bare ::slotted(<type>) → scoped type selector', () => {
+    const result = shadowToLight('::slotted(h1) { font-size: 2rem; }', 'arc-prose');
+    expect(result).toContain('.arc-prose h1 { font-size: 2rem; }');
+  });
+
+  it('::slotted(*) → scoped universal selector', () => {
+    const result = shadowToLight('::slotted(*) { margin: 0; }', 'arc-button-group');
+    expect(result).toContain('.arc-button-group * { margin: 0; }');
+  });
+
+  it('preserves attribute-selector ::slotted (named-slot static markup)', () => {
+    const result = shadowToLight('::slotted([slot="prefix"]) { margin-right: 4px; }', tag);
+    expect(result).toContain('.arc-button [slot="prefix"] { margin-right: 4px; }');
+  });
+
+  it('slot[name="x"]::slotted(SEL) → SEL[slot="x"]', () => {
+    const result = shadowToLight('slot[name="icon"]::slotted(svg) { width: 16px; }', tag);
+    expect(result).toContain('.arc-button svg[slot="icon"] { width: 16px; }');
+  });
+
+  it('slot[name="x"]::slotted(*) → [slot="x"]', () => {
+    const result = shadowToLight('slot[name="icon"]::slotted(*) { width: 16px; }', tag);
+    expect(result).toContain('.arc-button [slot="icon"] { width: 16px; }');
+  });
+
+  it('named slot on a class-bearing slot element still re-attaches [slot]', () => {
+    const result = shadowToLight('.btn-slot[name="icon"]::slotted(svg) { width: 16px; }', tag);
+    expect(result).toContain('.arc-button svg[slot="icon"] { width: 16px; }');
+  });
+
+  it('keeps nested parens in the projected selector balanced', () => {
+    const result = shadowToLight(
+      ':host([orientation="vertical"]) ::slotted(:not(:first-child)) { margin-top: 4px; }',
+      'arc-button-group'
+    );
+    expect(result).toContain(
+      '.arc-button-group[data-orientation="vertical"] :not(:first-child) { margin-top: 4px; }'
+    );
+  });
+
+  it('handles a comma list of projected type selectors', () => {
+    const css = '::slotted(input),\n::slotted(select) { border: none; }';
+    const result = shadowToLight(css, 'arc-input-group');
+    expect(result).toContain('.arc-input-group input');
+    expect(result).toContain('.arc-input-group select');
+  });
+
+  it('passes an unbalanced ::slotted( through untouched', () => {
+    const result = shadowToLight('::slotted(a { color: red; }', tag);
+    expect(result).toContain('::slotted(a');
+  });
+});
+
+describe('shadowToLight — ::slotted inside comments', () => {
+  it('does not rewrite a selector that is only mentioned in a comment', () => {
+    const css = '/* pair .btn with .btn-slot::slotted(a) rather than duplicating */\n.btn { color: red; }';
+    const result = shadowToLight(css, tag);
+    const comment = result.match(/\/\*[\s\S]*?\*\//)[0];
+    expect(comment).toContain('.btn-slot::slotted(a)');
+    expect(result).toContain('.arc-button .btn { color: red; }');
+  });
+
+  it('still rewrites real selectors that follow a comment', () => {
+    const css = '/* see ::slotted(span) above */\n.btn-slot::slotted(a) { color: red; }';
+    const result = shadowToLight(css, tag);
+    expect(result).toContain('::slotted(span)');
+    expect(result).toContain('.arc-button a { color: red; }');
+  });
+
+  it('handles an unterminated comment without dropping output', () => {
+    const result = shadowToLight('.btn { color: red; }\n/* trailing', tag);
+    expect(result).toContain('.arc-button .btn { color: red; }');
+    expect(result).toContain('/* trailing');
+  });
+});

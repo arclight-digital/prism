@@ -30,7 +30,7 @@
 // characters. This is deliberately strict — the tag flows unescaped into
 // generated code, file paths, and dynamically-built RegExps, so anything
 // outside this grammar is a code-injection / path-traversal / ReDoS vector.
-const VALID_TAG = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$/;
+export const VALID_TAG = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$/;
 
 // A valid custom event name for the same reasons (used as an object key and
 // string literal in generated wrappers). Custom events are conventionally
@@ -42,9 +42,10 @@ const VALID_EVENT = /^[a-z][\w-]*$/i;
  * @param {string} source - file contents
  * @param {string} filePath - path to the file (used to extract tier)
  * @param {string} [prefix='arc'] - component tag prefix (e.g. 'arc' for arc-button)
+ * @param {Record<string, string>} [overrides={}] - config.interactivity, tag → level
  * @returns {ComponentMeta|null}
  */
-export function parseComponent(source, filePath, prefix = 'arc') {
+export function parseComponent(source, filePath, prefix = 'arc', overrides = {}) {
   // Extract tag name from @tag JSDoc, falling back to customElements.define
   const tagDocMatch = source.match(/@tag\s+([a-z][\w-]*)/);
   const defineMatch = source.match(/customElements\.define\(\s*['"]([^'"]+)['"]\s*,\s*(\w+)\s*\)/);
@@ -92,7 +93,7 @@ export function parseComponent(source, filePath, prefix = 'arc') {
   const events = extractEvents(source);
 
   // Detect interactivity level
-  const interactivity = detectInteractivity(source, events);
+  const interactivity = detectInteractivity(source, events, tag, overrides);
 
   // Extract host display value from :host { display: ... }
   const hostDisplay = extractHostDisplay(css);
@@ -413,15 +414,25 @@ function extractTemplate(source) {
  *   - 'hybrid'      — visual works without JS, but JS adds features (e.g. copy button)
  *   - 'interactive'  — needs JS to function at all
  *
- * Layer 1: explicit comment overrides (checked first)
+ * Layer 0: config.interactivity overrides (checked first)
+ * Layer 1: explicit comment overrides
  * Layer 2: auto-detection (fallback, only distinguishes static vs interactive)
  *
  * @param {string} source - file contents
  * @param {string[]} events - custom event names already extracted
+ * @param {string} [tag] - component tag, for config lookup
+ * @param {Record<string, string>} [overrides={}] - config.interactivity, tag → level
  * @returns {'static'|'hybrid'|'interactive'}
  */
-function detectInteractivity(source, events) {
-  // Layer 1: Manual overrides via JSDoc tag on class (checked first)
+function detectInteractivity(source, events, tag, overrides = {}) {
+  // Layer 0: config overrides. Durable — unlike the JSDoc tag below, this can't
+  // be clobbered by a pass that rewrites component doc comments, which has
+  // silently dropped classification twice. normalizeConfig has already checked
+  // the value, so anything present here is a valid level.
+  if (overrides[tag]) return overrides[tag];
+
+  // Layer 1: Manual overrides via JSDoc tag on class (retained for
+  // back-compat; prefer config.interactivity)
   //   /** @arc-prism interactive */
   //   /** @arc-prism hybrid — display works without JS; copy requires JS */
   if (/@arc-prism\s+interactive\b/.test(source)) return 'interactive';
@@ -429,8 +440,13 @@ function detectInteractivity(source, events) {
   if (/@arc-prism\s+static\b/.test(source)) return 'static';
 
   // Layer 2: Auto-detection (binary — hybrid requires manual override)
-  // Has event bindings in template
-  if (/@(?:click|input|change|keydown|keyup|submit|focus|blur)\s*=/.test(source)) return 'interactive';
+  // Has event bindings in template. `focus`/`blur` carry optional `in`/`out`
+  // suffixes — without them `@focusin=` slips through (the `\s*=` can't span the
+  // `in`), so a component whose only handler is `@focusin` reads as static and
+  // ships CSS for behaviour it can't perform without JS.
+  if (/@(?:click|input|change|keydown|keyup|submit|focus(?:in|out)?|blur)\s*=/.test(source)) {
+    return 'interactive';
+  }
   // Dispatches custom events
   if (events.length > 0) return 'interactive';
   // Imperative DOM manipulation

@@ -5,6 +5,10 @@
 
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { VALID_TAG } from './parser.js';
+
+/** The classification levels `config.interactivity` may assign. */
+const LEVELS = new Set(['static', 'hybrid', 'interactive']);
 
 /**
  * Normalize config — apply defaults for optional fields so downstream
@@ -23,6 +27,27 @@ export function normalizeConfig(config) {
   }
   if (config.tiers !== undefined && !Array.isArray(config.tiers)) {
     throw new Error('prism: config.tiers must be an array of tier directory names');
+  }
+
+  // Classification overrides. Validated eagerly and loudly: a misspelt level or
+  // a malformed tag here would otherwise fall through to auto-detection and
+  // silently do nothing — the exact failure mode that made JSDoc markers
+  // unreliable in the first place.
+  if (config.interactivity !== undefined
+      && (typeof config.interactivity !== 'object' || config.interactivity === null
+          || Array.isArray(config.interactivity))) {
+    throw new Error('prism: config.interactivity must be an object mapping tag names to levels');
+  }
+  config.interactivity = config.interactivity || {};
+  for (const [tag, level] of Object.entries(config.interactivity)) {
+    if (!VALID_TAG.test(tag)) {
+      throw new Error(`prism: config.interactivity key "${tag}" is not a valid custom-element tag`);
+    }
+    if (!LEVELS.has(level)) {
+      throw new Error(
+        `prism: config.interactivity["${tag}"] is "${level}" — must be static, hybrid, or interactive`
+      );
+    }
   }
 
   config.prefix = config.prefix || 'arc';

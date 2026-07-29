@@ -9,7 +9,7 @@
 
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { isPrismGenerated } from './header.js';
+import { isPrismGenerated, removeGenerated } from './header.js';
 import { loadTokenMap, resolveTokens } from '../resolve-tokens.js';
 import { shadowToLight } from '../css-transform.js';
 
@@ -674,9 +674,23 @@ function generateHTMLInline(meta, config, root) {
  * @param {string} root - project root
  * @returns {{ results: Array<{ path: string, written: boolean }>, skipped: boolean }}
  */
-export function generateHTML(meta, config, root) {
+export function generateHTML(meta, config, root, { prune = false } = {}) {
+  // Interactive components get no HTML. Both variants are considered regardless
+  // of `inlineVariant`: if the flag was on for an earlier run, its output is
+  // just as stale as the external one.
   if (meta.interactivity === 'interactive') {
-    return { results: [], skipped: true };
+    const outDir = join(root, config.outDir);
+    const base = meta.tag.replace(new RegExp('^' + config.prefix + '-'), '');
+    const checked = [
+      join(outDir, base + '.html'),
+      join(outDir, base + '.inline.html'),
+    ].map((p) => removeGenerated(p, { apply: prune }));
+    return {
+      results: [],
+      skipped: true,
+      stale: checked.filter((r) => r.stale).map((r) => r.path),
+      removed: checked.filter((r) => r.removed).map((r) => r.path),
+    };
   }
 
   const results = [];
@@ -686,5 +700,5 @@ export function generateHTML(meta, config, root) {
     results.push(generateHTMLInline(meta, config, root));
   }
 
-  return { results, skipped: false };
+  return { results, skipped: false, stale: [], removed: [] };
 }

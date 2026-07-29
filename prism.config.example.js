@@ -1,3 +1,6 @@
+// Example prism config — copy to `prism.config.js` in your own project root
+// and adjust the paths. Prism only ever loads `prism.config.js` from the
+// directory it runs in, so this file is documentation, never live config.
 export default {
   // Component tag prefix (e.g. 'arc' → arc-button, ArcButton)
   prefix: 'arc',

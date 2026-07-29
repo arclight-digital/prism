@@ -1,3 +1,5 @@
+import { existsSync, readFileSync, unlinkSync } from 'node:fs';
+
 /**
  * Recognizes prism's own "do not edit" sentinel in an existing file so the
  * generators know they may overwrite it.
@@ -18,4 +20,34 @@ export function isPrismGenerated(content) {
   // Only inspect the head of the file: the sentinel always lives in the opening
   // comment, and this avoids matching the phrase if it appears in user content.
   return GENERATED_SENTINEL.test(content.slice(0, 300));
+}
+
+/**
+ * Delete output prism no longer produces for a component.
+ *
+ * A component that gains a `@click` handler (or any other interactivity signal)
+ * flips from `static` to `interactive`, and the CSS/HTML generators start
+ * skipping it. Skipping only means "don't write" — so whatever an earlier run
+ * left on disk stays there forever, never overwritten because the generator
+ * bails before the write and never refreshed because nothing else owns the
+ * path. Consumers keep loading a file that no current build produces, and it
+ * silently drifts from the component it claims to describe.
+ *
+ * Removal is gated on the sentinel, exactly like the overwrite path: a
+ * hand-written file sitting at a generated path is never deleted.
+ *
+ * `apply: false` reports what is stale without touching disk — the default,
+ * because deleting output prism can no longer regenerate is irreversible
+ * outside version control.
+ *
+ * @param {string} outPath
+ * @param {{ apply?: boolean }} [opts]
+ * @returns {{ path: string, stale: boolean, removed: boolean }}
+ */
+export function removeGenerated(outPath, { apply = false } = {}) {
+  const miss = { path: outPath, stale: false, removed: false };
+  if (!existsSync(outPath)) return miss;
+  if (!isPrismGenerated(readFileSync(outPath, 'utf-8'))) return miss;
+  if (apply) unlinkSync(outPath);
+  return { path: outPath, stale: true, removed: apply };
 }

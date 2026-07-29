@@ -190,3 +190,41 @@ describe('discoverComponents', () => {
     expect(files).toEqual([]);
   });
 });
+
+describe('normalizeConfig — interactivity overrides', () => {
+  const base = () => ({ components: 'src', tiers: ['content'] });
+
+  it('defaults to an empty object', () => {
+    expect(normalizeConfig(base()).interactivity).toEqual({});
+  });
+
+  it('accepts all three levels', () => {
+    const cfg = normalizeConfig({
+      ...base(),
+      interactivity: { 'arc-tab': 'interactive', 'arc-tooltip': 'hybrid', 'arc-box': 'static' },
+    });
+    expect(cfg.interactivity['arc-tooltip']).toBe('hybrid');
+  });
+
+  it('throws on an unknown level', () => {
+    expect(() => normalizeConfig({ ...base(), interactivity: { 'arc-tab': 'interactiv' } }))
+      .toThrow(/is "interactiv" — must be static, hybrid, or interactive/);
+  });
+
+  it('throws on a tag with no hyphen', () => {
+    expect(() => normalizeConfig({ ...base(), interactivity: { button: 'static' } }))
+      .toThrow(/is not a valid custom-element tag/);
+  });
+
+  it('throws on a tag with invalid characters', () => {
+    expect(() => normalizeConfig({ ...base(), interactivity: { 'Arc-Tab': 'static' } }))
+      .toThrow(/is not a valid custom-element tag/);
+  });
+
+  it('throws when interactivity is not an object', () => {
+    expect(() => normalizeConfig({ ...base(), interactivity: ['arc-tab'] }))
+      .toThrow(/must be an object mapping tag names to levels/);
+    expect(() => normalizeConfig({ ...base(), interactivity: 'hybrid' }))
+      .toThrow(/must be an object mapping tag names to levels/);
+  });
+});

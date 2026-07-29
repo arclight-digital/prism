@@ -286,3 +286,81 @@ describe('parseComponent', () => {
     });
   });
 });
+
+describe('detectInteractivity — focus event suffixes', () => {
+  const wrap = (template) => `
+    import { LitElement, html, css } from 'lit';
+    export class ArcThing extends LitElement {
+      static styles = css\`:host { display: block; }\`;
+      render() { return html\`${template}\`; }
+    }
+    customElements.define('arc-thing', ArcThing);
+  `;
+
+  it('treats @focusin as interactive', () => {
+    // `@focusin=` has `in` between `focus` and `=`, so a `@focus\s*=` pattern
+    // misses it and the component wrongly ships CSS for JS-driven behaviour.
+    const meta = parseComponent(wrap('<div @focusin=${this._show}></div>'), 'thing.js', 'arc');
+    expect(meta.interactivity).toBe('interactive');
+  });
+
+  it('treats @focusout as interactive', () => {
+    const meta = parseComponent(wrap('<div @focusout=${this._hide}></div>'), 'thing.js', 'arc');
+    expect(meta.interactivity).toBe('interactive');
+  });
+
+  it('still treats plain @focus and @blur as interactive', () => {
+    for (const ev of ['focus', 'blur']) {
+      const meta = parseComponent(wrap(`<div @${ev}=\${this._x}></div>`), 'thing.js', 'arc');
+      expect(meta.interactivity).toBe('interactive');
+    }
+  });
+
+  it('leaves a purely presentational component static', () => {
+    const meta = parseComponent(wrap('<div class="box"><slot></slot></div>'), 'thing.js', 'arc');
+    expect(meta.interactivity).toBe('static');
+  });
+});
+
+describe('detectInteractivity — config overrides (Layer 0)', () => {
+  const src = (extra = '') => `
+    import { LitElement, html, css } from 'lit';
+    ${extra}
+    export class ArcThing extends LitElement {
+      static styles = css\`:host { display: block; }\`;
+      render() { return html\`<div class="box"><slot></slot></div>\`; }
+    }
+    customElements.define('arc-thing', ArcThing);
+  `;
+
+  it('config override beats auto-detection', () => {
+    // Auto-detection would call this static — nothing in it needs JS.
+    expect(parseComponent(src(), 'thing.js', 'arc').interactivity).toBe('static');
+    expect(parseComponent(src(), 'thing.js', 'arc', { 'arc-thing': 'hybrid' }).interactivity)
+      .toBe('hybrid');
+  });
+
+  it('config override beats the @arc-prism JSDoc tag', () => {
+    const withTag = src('/** @arc-prism static */');
+    expect(parseComponent(withTag, 'thing.js', 'arc').interactivity).toBe('static');
+    expect(parseComponent(withTag, 'thing.js', 'arc', { 'arc-thing': 'interactive' }).interactivity)
+      .toBe('interactive');
+  });
+
+  it('config override can force static despite an interactive signal', () => {
+    const clicky = src().replace('<div class="box">', '<div class="box" @click=${this._x}>');
+    expect(parseComponent(clicky, 'thing.js', 'arc').interactivity).toBe('interactive');
+    expect(parseComponent(clicky, 'thing.js', 'arc', { 'arc-thing': 'static' }).interactivity)
+      .toBe('static');
+  });
+
+  it('an override for a different tag does not apply', () => {
+    expect(parseComponent(src(), 'thing.js', 'arc', { 'arc-other': 'hybrid' }).interactivity)
+      .toBe('static');
+  });
+
+  it('the JSDoc tag still works when no override is present', () => {
+    expect(parseComponent(src('/** @arc-prism hybrid */'), 'thing.js', 'arc', {}).interactivity)
+      .toBe('hybrid');
+  });
+});
