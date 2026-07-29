@@ -24,6 +24,7 @@ import { generatePreact } from './generators/preact.js';
 import { generateHTML } from './generators/html.js';
 import { generateCSS, generateCSSBundle } from './generators/css.js';
 import { sweepOrphans } from './generators/prune.js';
+import { outputSummary, misclassified, formatBytes } from './report.js';
 import {
   updateWCBarrel,
   updateReactTierBarrel,
@@ -314,6 +315,40 @@ function processFile(filePath, config) {
 }
 
 /**
+ * State what the run did not produce. Skipping is normal, but the aggregate is
+ * never visible per-component, and a component silently contributing nothing to
+ * the package is exactly how a shipped-with-no-button-styles bug survives.
+ */
+function reportOutput(metas) {
+  const s = outputSummary(metas);
+  if (s.skipped === 0) return;
+  console.log(
+    `\n${s.emitting} of ${s.total} components produce HTML/CSS; ` +
+    `${s.skipped} are interactive (${formatBytes(s.skippedCSSBytes)} of component CSS reaches no output).`
+  );
+
+  const suspects = misclassified(metas);
+  if (suspects.length === 0) return;
+  // Capped: this prints on every run, and a wall of 30 lines trains people to
+  // scroll past it. Sorted by stylesheet size, so the truncated tail is always
+  // the least consequential.
+  const SHOWN = 10;
+  console.log(
+    `\n${suspects.length} of those ${suspects.length === 1 ? 'looks' : 'look'} presentational` +
+    ' — few handlers on a substantial stylesheet:'
+  );
+  for (const m of suspects.slice(0, SHOWN)) {
+    const sig = m.classification.signals;
+    const on = sig.handlers.length ? `@${sig.handlers.join(', @')}` : 'a dispatched event';
+    console.log(`  ${m.tag} — ${formatBytes(m.css.length)} CSS, classified interactive by ${on}`);
+  }
+  if (suspects.length > SHOWN) {
+    console.log(`  … and ${suspects.length - SHOWN} more with smaller stylesheets`);
+  }
+  console.log("  Pin any that render without JS: config.interactivity: { '<tag>': 'hybrid' }");
+}
+
+/**
  * Warn about `config.interactivity` keys that matched no component. A renamed
  * or deleted component silently drops its override otherwise — the entry just
  * sits in the config looking authoritative while auto-detection quietly decides
@@ -372,6 +407,7 @@ async function main() {
 
     if (allMetas.length > 0) {
       warnUnmatchedOverrides(allMetas, config);
+      reportOutput(allMetas);
       runSweep(allMetas, config);
     }
 
@@ -400,6 +436,7 @@ async function main() {
       }
       if (sweep) {
         warnUnmatchedOverrides(metas, config);
+        reportOutput(metas);
         runSweep(metas, config);
       }
     };
@@ -464,6 +501,7 @@ async function main() {
 
     if (allMetas.length > 0) {
       warnUnmatchedOverrides(allMetas, config);
+      reportOutput(allMetas);
       runSweep(allMetas, config);
     }
 

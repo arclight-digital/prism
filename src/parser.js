@@ -93,12 +93,16 @@ export function parseComponent(source, filePath, prefix = 'arc', overrides = {})
   const events = extractEvents(source);
 
   // Detect interactivity level
-  const interactivity = detectInteractivity(source, events, tag, overrides);
+  const classification = classify(source, events, tag, overrides);
+  const interactivity = classification.level;
 
   // Extract host display value from :host { display: ... }
   const hostDisplay = extractHostDisplay(css);
 
-  return { tag, className, pascalName, tier, props, css, template, events, interactivity, hostDisplay };
+  return {
+    tag, className, pascalName, tier, props, css, template, events,
+    interactivity, classification, hostDisplay,
+  };
 }
 
 /**
@@ -418,43 +422,59 @@ function extractTemplate(source) {
  * Layer 1: explicit comment overrides
  * Layer 2: auto-detection (fallback, only distinguishes static vs interactive)
  *
+ * Returns the level alongside *why* it was reached. The provenance matters
+ * downstream: an auto-detected `interactive` is a guess that may be wrong,
+ * whereas a config- or JSDoc-sourced one is a decision someone made, and
+ * reporting must never second-guess the latter.
+ *
  * @param {string} source - file contents
  * @param {string[]} events - custom event names already extracted
  * @param {string} [tag] - component tag, for config lookup
  * @param {Record<string, string>} [overrides={}] - config.interactivity, tag → level
- * @returns {'static'|'hybrid'|'interactive'}
+ * @returns {{ level: 'static'|'hybrid'|'interactive', origin: 'config'|'jsdoc'|'auto', signals: object }}
  */
-function detectInteractivity(source, events, tag, overrides = {}) {
+function classify(source, events, tag, overrides = {}) {
+  // The raw evidence, gathered regardless of which layer decides. Kept on the
+  // meta so a later pass can ask "how interactive is this really?" without
+  // re-reading the file.
+  const handlerRe = /@(click|input|change|keydown|keyup|submit|focus(?:in|out)?|blur)\s*=/g;
+  const matches = [...source.matchAll(handlerRe)];
+  const signals = {
+    handlers: [...new Set(matches.map((m) => m[1]))],
+    handlerCount: matches.length,
+    events: events.length,
+    imperativeDOM: /this\.shadowRoot\.querySelector/.test(source),
+    hostDisplayNone: /:host\s*\{[^}]*display:\s*none/.test(source),
+  };
+
   // Layer 0: config overrides. Durable — unlike the JSDoc tag below, this can't
   // be clobbered by a pass that rewrites component doc comments, which has
   // silently dropped classification twice. normalizeConfig has already checked
   // the value, so anything present here is a valid level.
-  if (overrides[tag]) return overrides[tag];
+  if (overrides[tag]) return { level: overrides[tag], origin: 'config', signals };
 
   // Layer 1: Manual overrides via JSDoc tag on class (retained for
   // back-compat; prefer config.interactivity)
   //   /** @arc-prism interactive */
   //   /** @arc-prism hybrid — display works without JS; copy requires JS */
-  if (/@arc-prism\s+interactive\b/.test(source)) return 'interactive';
-  if (/@arc-prism\s+hybrid\b/.test(source)) return 'hybrid';
-  if (/@arc-prism\s+static\b/.test(source)) return 'static';
+  const jsdoc = source.match(/@arc-prism\s+(interactive|hybrid|static)\b/);
+  if (jsdoc) return { level: jsdoc[1], origin: 'jsdoc', signals };
 
-  // Layer 2: Auto-detection (binary — hybrid requires manual override)
-  // Has event bindings in template. `focus`/`blur` carry optional `in`/`out`
-  // suffixes — without them `@focusin=` slips through (the `\s*=` can't span the
-  // `in`), so a component whose only handler is `@focusin` reads as static and
-  // ships CSS for behaviour it can't perform without JS.
-  if (/@(?:click|input|change|keydown|keyup|submit|focus(?:in|out)?|blur)\s*=/.test(source)) {
-    return 'interactive';
-  }
+  // Layer 2: Auto-detection (binary — hybrid requires manual override).
+  // `focus`/`blur` carry optional `in`/`out` suffixes — without them `@focusin=`
+  // slips through (the `\s*=` can't span the `in`), so a component whose only
+  // handler is `@focusin` reads as static and ships CSS for behaviour it can't
+  // perform without JS.
+  const auto = (level) => ({ level, origin: 'auto', signals });
+  if (signals.handlerCount > 0) return auto('interactive');
   // Dispatches custom events
-  if (events.length > 0) return 'interactive';
+  if (signals.events > 0) return auto('interactive');
   // Imperative DOM manipulation
-  if (/this\.shadowRoot\.querySelector/.test(source)) return 'interactive';
+  if (signals.imperativeDOM) return auto('interactive');
   // Data container: :host { display: none } — child-only component for interactive parent
-  if (/:host\s*\{[^}]*display:\s*none/.test(source)) return 'interactive';
+  if (signals.hostDisplayNone) return auto('interactive');
 
-  return 'static';
+  return auto('static');
 }
 
 /**

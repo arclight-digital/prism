@@ -364,3 +364,53 @@ describe('detectInteractivity — config overrides (Layer 0)', () => {
       .toBe('hybrid');
   });
 });
+
+describe('classification provenance', () => {
+  const src = (extra = '', body = '<div class="box"><slot></slot></div>') => `
+    import { LitElement, html, css } from 'lit';
+    ${extra}
+    export class ArcThing extends LitElement {
+      static styles = css\`:host { display: block; }\`;
+      render() { return html\`${body}\`; }
+    }
+    customElements.define('arc-thing', ArcThing);
+  `;
+
+  it('records origin "config" for a config override', () => {
+    const m = parseComponent(src(), 'thing.js', 'arc', { 'arc-thing': 'hybrid' });
+    expect(m.classification.origin).toBe('config');
+    expect(m.classification.level).toBe('hybrid');
+  });
+
+  it('records origin "jsdoc" for a JSDoc tag', () => {
+    const m = parseComponent(src('/** @arc-prism hybrid */'), 'thing.js', 'arc');
+    expect(m.classification.origin).toBe('jsdoc');
+  });
+
+  it('records origin "auto" otherwise', () => {
+    expect(parseComponent(src(), 'thing.js', 'arc').classification.origin).toBe('auto');
+  });
+
+  it('captures handler signals even when a config override decides', () => {
+    const clicky = src('', '<div @click=${this._a} @keydown=${this._b}></div>');
+    const m = parseComponent(clicky, 'thing.js', 'arc', { 'arc-thing': 'static' });
+    expect(m.classification.origin).toBe('config');
+    expect(m.classification.signals.handlerCount).toBe(2);
+    expect(m.classification.signals.handlers.sort()).toEqual(['click', 'keydown']);
+  });
+
+  it('captures imperative DOM and display:none signals', () => {
+    const m = parseComponent(
+      src('', '<div></div>').replace('display: block', 'display: none')
+        .replace('render()', 'x() { this.shadowRoot.querySelector("a"); }\n      render()'),
+      'thing.js', 'arc'
+    );
+    expect(m.classification.signals.imperativeDOM).toBe(true);
+    expect(m.classification.signals.hostDisplayNone).toBe(true);
+  });
+
+  it('interactivity still mirrors classification.level', () => {
+    const m = parseComponent(src('/** @arc-prism interactive */'), 'thing.js', 'arc');
+    expect(m.interactivity).toBe(m.classification.level);
+  });
+});

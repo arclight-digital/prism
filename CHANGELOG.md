@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.2.0 — 2026-07-28
+
+### Added
+
+- **Every run reports what it didn't produce.** Skipping an `interactive` component is a one-line note buried among hundreds, and the aggregate was never stated anywhere. Runs now end with `85 of 186 components produce HTML/CSS; 101 are interactive (237 KB of component CSS reaches no output)`. That silence is how `arc-button` shipped with zero styles for two releases — it gained a `@click` form-submit bridge, auto-detection flipped it to `interactive`, and a stale `button.css` from before the reclassification masked the gap until it was pruned.
+- **Likely-misclassified components are flagged.** Auto-detection is binary, so one incidental handler drops a component's entire stylesheet from the package — correct for a modal, wrong for a button whose only handler bridges form submission. Skipped components that look presentational are now listed with the signal that tripped them and a pointer to `config.interactivity`. Deliberately narrow, since a false positive tells someone to ship a component that doesn't work without JS: only auto-detected classifications are questioned (config and `@arc-prism` levels are decisions, never re-litigated), and imperative shadow DOM, `:host { display: none }`, more than two handlers, or under 800 bytes of CSS all disqualify. Verified against arc-ui: with the overrides removed, `arc-button` is flagged — this would have caught the bug.
+- **`ComponentMeta.classification`** exposes how a level was reached: `{ level, origin: 'config' | 'jsdoc' | 'auto', signals }`, where `signals` carries handler names and count, dispatched-event count, imperative-DOM use, and `display: none` host. `interactivity` is unchanged and still mirrors `classification.level`.
+
 ## 2.1.0 — 2026-07-28
 
 ### Added

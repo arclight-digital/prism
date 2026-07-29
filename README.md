@@ -269,6 +269,25 @@ Valid values: `static`, `hybrid`, `interactive`. Still fully supported, but note
 that a *malformed* tag is inert — it neither throws nor warns, it just falls
 through to auto-detection. `config.interactivity` has no such failure mode.
 
+### What a run didn't produce
+
+Skipping is quiet per-component and invisible in aggregate, so every run now
+states the total — and flags skipped components that look like they shouldn't be:
+
+```
+85 of 186 components produce HTML/CSS; 101 are interactive (237 KB of component CSS reaches no output).
+
+3 of those look presentational — few handlers on a substantial stylesheet:
+  arc-button — 4 KB CSS, classified interactive by @click
+  Pin any that render without JS: config.interactivity: { '<tag>': 'hybrid' }
+```
+
+The flag is deliberately narrow: only **auto-detected** classifications are
+questioned (a `config.interactivity` or `@arc-prism` level is a decision, not a
+guess), and components using imperative shadow DOM, carrying `:host { display:
+none }`, binding more than two handlers, or styling less than 800 bytes are all
+excluded. It is a prompt to look, never an assertion that the level is wrong.
+
 ### Stale output
 
 A component that becomes `interactive` stops producing HTML/CSS, and a deleted
