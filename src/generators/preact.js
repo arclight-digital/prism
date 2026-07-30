@@ -89,7 +89,10 @@ export function generatePreact(meta, config, root) {
   ));
   for (const event of meta.events) destructured.push(eventToHandlerName(event));
   if (takesChildren) destructured.push('children');
-  const destructStr = destructured.join(', ');
+  // `({ , ...rest })` is a syntax error. A component with no props, no events
+  // and no children destructures nothing, which only became reachable once
+  // `@slot none` let children be dropped from a propless component.
+  const destructStr = destructured.length ? `${destructured.join(', ')}, ` : '';
 
   // Object-literal keys keep the real prop name even when the local binding
   // was renamed for a reserved word (`for: forProp` is a legal literal entry).
@@ -99,7 +102,7 @@ export function generatePreact(meta, config, root) {
 
   if (hasEvents) {
     const propsObj = ['ref', ...propEntries, '...rest'].join(', ');
-    lines.push(`export const ${meta.pascalName}: FunctionComponent<${meta.pascalName}Props> = ({ ${destructStr}, ...rest }) => {`);
+    lines.push(`export const ${meta.pascalName}: FunctionComponent<${meta.pascalName}Props> = ({ ${destructStr}...rest }) => {`);
     lines.push(`  const ref = useRef<HTMLElement>(null);`);
     lines.push(`  useLayoutEffect(() => {`);
     lines.push(`    const el = ref.current;`);
@@ -123,7 +126,7 @@ export function generatePreact(meta, config, root) {
     lines.push(`};`);
   } else {
     const propsObj = [...propEntries, '...rest'].join(', ');
-    lines.push(`export const ${meta.pascalName}: FunctionComponent<${meta.pascalName}Props> = ({ ${destructStr}, ...rest }) =>`);
+    lines.push(`export const ${meta.pascalName}: FunctionComponent<${meta.pascalName}Props> = ({ ${destructStr}...rest }) =>`);
     if (takesChildren) {
       lines.push(`  h('${meta.tag}', { ${propsObj} }, children);`);
     } else {

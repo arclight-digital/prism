@@ -1,6 +1,6 @@
 {
   "name": "@arclux/prism",
-  "version": "2.8.1",
+  "version": "2.9.0",
   "description": "Auto-generate framework wrappers (React, Vue, Svelte, Angular, Solid, Preact) and HTML/CSS examples from Lit web components",
   "type": "module",
   "exports": {

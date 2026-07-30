@@ -1209,6 +1209,39 @@ describe('camelCase props reach the element as properties', () => {
   });
 });
 
+describe('a component with nothing to destructure', () => {
+  // arc-menu-divider: no props, no events, and `@slot none` — so the Preact
+  // wrapper destructured an empty list and emitted `({ , ...rest })`, which is
+  // a syntax error. Unreachable until children could be dropped from a
+  // propless component.
+  const bare = {
+    ...meta,
+    tag: 'arc-menu-divider',
+    className: 'ArcMenuDivider',
+    pascalName: 'MenuDivider',
+    props: [],
+    events: [],
+    eventDetails: {},
+    slots: [],
+    hasDefaultSlot: false,
+    noDefaultSlot: true,
+    template: '<div class="divider"></div>',
+  };
+
+  it('Preact emits valid destructuring', () => {
+    const c = readFileSync(generatePreact(bare, config('out/bare-p'), tmpDir).path, 'utf-8');
+    expect(c).toContain('({ ...rest })');
+    expect(c).not.toContain('({ , ');
+  });
+
+  it('Solid and Svelte stay valid too', () => {
+    expect(readFileSync(generateSolid(bare, config('out/bare-so'), tmpDir).path, 'utf-8'))
+      .toContain('splitProps(props, [])');
+    expect(readFileSync(generateSvelte(bare, config('out/bare-s'), tmpDir).path, 'utf-8'))
+      .toContain('let { ...rest }: Props = $props();');
+  });
+});
+
 describe('children only where there is a default slot', () => {
   const noSlot = {
     ...meta,

@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.9.0 — 2026-07-30
+
+### Added
+
+- **`@slot none` — a way to say a component takes no children.** Prism drops the `children` member only on positive evidence, because reading "no default slot found" as "no default slot exists" is what deleted content from 111 wrappers in 2.7.0. But that left no way to state the truth about a component whose file contains no `<slot>` at all: the wrapper kept a `children` prop that silently discards whatever is passed to it. In one real design system that was 66 of 185 components.
+
+  `@slot none` in the class JSDoc is the author asserting it. Every wrapper then omits `children` — a type error at the call site instead of content vanishing at runtime.
+
+  ```js
+  /**
+   * @tag arc-spinner
+   * @slot none
+   */
+  ```
+
+  `none` is reserved as the name of the absence and is never recorded as a slot. A rendered default `<slot>` still wins over the tag — a stale annotation must not delete content — and the contradiction is reported as `slot-none-contradicted`. The `children-without-default-slot` warning now names the annotation as the fix.
+
+  One consequence in the Preact generator: a component with no props, no events and no children destructures nothing, and `({ , ...rest })` is a syntax error. Unreachable before this release, since `children` was always there to fill the list.
+
 ## 2.8.1 — 2026-07-30
 
 ### Fixed

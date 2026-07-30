@@ -214,15 +214,33 @@ function processFile(filePath, config) {
   // base class, a mixin or an imported helper looks exactly the same from here.
   // 2.7.0 acted on evidence this weak and deleted content from 90 wrappers, so
   // this states the case and leaves the call to someone who can see the whole
-  // component.
-  if (!meta.hasDefaultSlot && (meta.slotsInMarkup?.length ?? 0) === 0 && enabled.length > 0) {
+  // component. `@slot none` is how they record it.
+  if (
+    !meta.hasDefaultSlot &&
+    !meta.noDefaultSlot &&
+    (meta.slotsInMarkup?.length ?? 0) === 0 &&
+    enabled.length > 0
+  ) {
     diagnostics.push({
       code: 'children-without-default-slot',
       message:
         `${meta.tag} has no default <slot> that prism could find, but its wrappers still accept ` +
         '`children` — content passed there lands unassigned in the light DOM and renders nothing. ' +
-        'If the component really has no default slot, this is a type that lies; if it inherits one, ' +
-        'this is expected.',
+        'If the component really has no default slot, document `@slot none` and the wrappers will ' +
+        'stop accepting children; if it inherits one, this is expected and needs nothing.',
+      file: filePath,
+      tag: meta.tag,
+    });
+  }
+
+  // `@slot none` next to a rendered `<slot>`. The markup wins — children are
+  // kept — but one of the two is wrong and only the author knows which.
+  if (meta.hasDefaultSlot && meta.noDefaultSlot) {
+    diagnostics.push({
+      code: 'slot-none-contradicted',
+      message:
+        `${meta.tag} documents \`@slot none\` but renders a default <slot>. The markup wins and the ` +
+        'wrappers still accept children — either the tag is stale, or the slot is.',
       file: filePath,
       tag: meta.tag,
     });
@@ -537,6 +555,7 @@ function flushDiagnostics(config) {
     'unmatched-acknowledge': 'config.acknowledge entries matching no finding',
     'wrapper-missing-slot': 'generated wrappers missing an outlet the component declares',
     'children-without-default-slot': 'wrappers accepting children for elements with no default slot',
+    'slot-none-contradicted': '`@slot none` on components that do render a default slot',
     'unknown-acknowledge-code': 'config.acknowledge codes this version does not emit — ignored',
     'invalid-tag': 'components skipped for an invalid tag name',
     'invalid-event': 'events dropped for an invalid name',

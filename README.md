@@ -193,6 +193,17 @@ A component with `<slot name="start">` gets a snippet prop per slot in the Svelt
 
 Inside a snippet or a `<template #…>` body, `slot="start"` is ordinary markup and reaches the element intact. The older Svelte form — `<button slot="start">` as a direct child of the component — depends on Svelte preserving the attribute when it converts that child into a snippet prop; the explicit form above doesn't.
 
+**Components that take no children: `@slot none`.** A wrapper accepts `children` unless prism has positive evidence it shouldn't — either it saw named slots and no default one, or you said so. Finding no `<slot>` in the file is not evidence: a default slot rendered by a base class, a mixin, or a helper method looks identical from here, and acting on that in 2.7.0 deleted content from 111 wrappers. So for a component that genuinely has nowhere to put children — a spinner, an icon, a progress bar — say it in the class JSDoc:
+
+```js
+/**
+ * @tag arc-spinner
+ * @slot none
+ */
+```
+
+Every wrapper then omits `children`, turning content that used to vanish at runtime into a type error at the call site. `none` is reserved for this and is never recorded as a slot name. If the component does render a default `<slot>`, the markup wins and prism reports the contradiction (`slot-none-contradicted`) rather than deleting anything.
+
 Slot names that aren't valid identifiers can't be snippet props, so `slot="icon-left"` is exposed as `iconLeft`. Svelte takes the prop name from the attribute verbatim, so `{#snippet iconLeft()}` reaches it and `slot="icon-left"` on a direct child doesn't. Prism reports each remapped name (`slot-name-remapped`) rather than leaving you to discover it; rename the slot on the component if both forms need to work.
 
 ### What the generated Props accept

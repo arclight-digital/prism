@@ -31,6 +31,8 @@
  * @property {string[]} slotsInMarkup - the subset seen as real `<slot name>` tags,
  *   as opposed to known only from a `@slot` JSDoc tag
  * @property {boolean} hasDefaultSlot - whether it also has an unnamed <slot>
+ * @property {boolean} noDefaultSlot - whether the author declared `@slot none`,
+ *   asserting the component has no default slot and takes no children
  * @property {'static'|'hybrid'|'interactive'} interactivity - how much JS the component needs
  * @property {string} hostDisplay - CSS display value from :host (e.g. 'block', 'inline-flex')
  */
@@ -144,11 +146,11 @@ export function parseComponent(source, filePath, prefix = 'arc', overrides = {},
 
   // Named slots. Nothing recorded these before, so every wrapper projected a
   // single anonymous child list and named-slot content had nowhere to go.
-  const { slots, slotsInMarkup, hasDefaultSlot } = extractSlots(template, source);
+  const { slots, slotsInMarkup, hasDefaultSlot, noDefaultSlot } = extractSlots(template, source);
 
   return {
     tag, className, pascalName, tier, props, css, template, events, eventDetails,
-    slots, slotsInMarkup, hasDefaultSlot, interactivity, classification, hostDisplay,
+    slots, slotsInMarkup, hasDefaultSlot, noDefaultSlot, interactivity, classification, hostDisplay,
   };
 }
 
@@ -875,10 +877,17 @@ function extractSlots(template, source = '') {
   for (const m of source.matchAll(/@slot\s+([A-Za-z_][\w-]*)(\$\{)?/g)) {
     if (!m[2]) named.add(m[1]);
   }
+  // `@slot none` is the author asserting there is no default slot — the one
+  // piece of evidence this parser cannot gather for itself. Absence of a
+  // `<slot>` in the file is not the same claim (a base class or an imported
+  // helper renders one just as invisibly), which is why children are otherwise
+  // kept. `none` is reserved: it names the absence, never a slot.
+  const noDefaultSlot = /@slot\s+none\b/.test(source);
+  named.delete('none');
   // A `<slot>` with no name attribute anywhere in its tag is the default slot.
   const hasDefaultSlot = [...haystack.matchAll(/<slot\b([^>]*)>/g)]
     .some((m) => !/\bname\s*=/.test(m[1]));
-  return { slots: [...named], slotsInMarkup: [...inMarkup], hasDefaultSlot };
+  return { slots: [...named], slotsInMarkup: [...inMarkup], hasDefaultSlot, noDefaultSlot };
 }
 
 /**

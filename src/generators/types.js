@@ -21,16 +21,23 @@
  * "no default slot found" as "no default slot exists". Those are different
  * claims, and only the second one justifies removing anything.
  *
- * So children are dropped only on positive evidence: slots were found, and none
- * of them was the default. Finding no slots at all is not evidence a component
- * has none — it is equally consistent with having failed to look in the right
- * place — so that case keeps children.
+ * So children are dropped only on positive evidence: either slots were found
+ * and none of them was the default, or the author wrote `@slot none`. Finding
+ * no slots at all is not evidence a component has none — it is equally
+ * consistent with having failed to look in the right place — so that case keeps
+ * children until someone annotates it.
  *
  * @param {import('../parser.js').ComponentMeta} meta
  * @returns {boolean}
  */
 export function acceptsChildren(meta) {
+  // Markup beats annotation: a `<slot>` that is actually rendered is not made
+  // to disappear by a stale doc tag, and the contradiction is reported.
   if (meta.hasDefaultSlot) return true;
+  // `@slot none` supplies the evidence the parser can't: the author says there
+  // is nowhere for children to go. This is the only way to drop children from
+  // a component whose file contains no slots at all.
+  if (meta.noDefaultSlot) return false;
   // Gated on slots seen as real markup, not on documented ones. A `@slot header`
   // tag proves a named slot exists; it says nothing about whether the default
   // slot is rendered somewhere this parser never reads — a base class, a mixin,

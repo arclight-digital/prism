@@ -148,6 +148,60 @@ describe('children are dropped only on positive evidence', () => {
   });
 });
 
+describe('`@slot none` supplies the evidence the parser cannot gather', () => {
+  it('drops children from every wrapper when the author declares it', () => {
+    // The other half of the asymmetry. Absence of a slot in the file is not
+    // evidence the component has none — but the author saying so is, and
+    // without a way to say it the 66 slotless components in a real design
+    // system keep a `children` member that silently discards content.
+    const meta = parse('render() { return html`<div class="dot"></div>`; }', ' * @slot none');
+    expect(meta.noDefaultSlot).toBe(true);
+    for (const [framework, { gen, marker }] of Object.entries(RENDERS_CHILDREN)) {
+      const out = readFileSync(gen(meta, cfg(`out/sn-${framework}`), tmpDir).path, 'utf-8');
+      expect(out, framework).not.toContain(marker);
+    }
+  });
+
+  it('does not record `none` as a slot named none', () => {
+    const meta = parse('render() { return html`<div></div>`; }', ' * @slot none');
+    expect(meta.slots).toEqual([]);
+    expect(meta.slotsInMarkup).toEqual([]);
+  });
+
+  it('keeps named slots working alongside it', () => {
+    const meta = parse(
+      'render() { return html`<div><slot name="actions"></slot></div>`; }',
+      ' * @slot none\n * @slot actions - Buttons',
+    );
+    expect(meta.slots).toEqual(['actions']);
+    const out = readFileSync(generateSvelte(meta, cfg('out/sn-named'), tmpDir).path, 'utf-8');
+    expect(out).toContain('{@render actions?.()}');
+    expect(out).not.toContain('{@render children?.()}');
+  });
+
+  it('loses to a default slot that is actually rendered', () => {
+    // A stale tag must not delete content. The markup is the fact; the
+    // contradiction is reported by the CLI, not resolved in the author's favour.
+    const meta = parse(
+      'render() { return html`<div><slot></slot></div>`; }',
+      ' * @slot none',
+    );
+    expect(meta.hasDefaultSlot).toBe(true);
+    expect(meta.noDefaultSlot).toBe(true);
+    for (const [framework, { gen, marker }] of Object.entries(RENDERS_CHILDREN)) {
+      const out = readFileSync(gen(meta, cfg(`out/sn-c-${framework}`), tmpDir).path, 'utf-8');
+      expect(out, framework).toContain(marker);
+    }
+  });
+
+  it('leaves an unannotated slotless component alone', () => {
+    const meta = parse('render() { return html`<div class="dot"></div>`; }');
+    expect(meta.noDefaultSlot).toBe(false);
+    const out = readFileSync(generateSvelte(meta, cfg('out/sn-un'), tmpDir).path, 'utf-8');
+    expect(out).toContain('{@render children?.()}');
+  });
+});
+
 describe('named slots reach the wrappers that can carry them', () => {
   const body = 'render() { return html`<div><slot name="start"></slot><slot></slot></div>`; }';
 
