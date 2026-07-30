@@ -1173,3 +1173,67 @@ describe('components with no default slot', () => {
     expect(meta.hasDefaultSlot).toBe(false);
   });
 });
+
+describe('dynamic slot names', () => {
+  it('ignores a runtime-built slot name in the template', () => {
+    const meta = parseComponent(`
+      /** @tag arc-virtual-list */
+      export class ArcVirtualList extends LitElement {
+        render() {
+          return html\`<div>\${this.rows.map((r, index) => html\`<slot name="item-\${index}"></slot>\`)}</div>\`;
+        }
+      }
+    `, '/src/application/virtual-list.js', prefix);
+    expect(meta.slots).toEqual([]);
+  });
+
+  it('ignores a @slot tag documenting a dynamic family', () => {
+    // The name regex stops at the `$` and would record a phantom `item-` slot.
+    const meta = parseComponent(`
+      /**
+       * @tag arc-virtual-list
+       * @slot item-\${index} - Per-row content
+       */
+      export class ArcVirtualList extends LitElement {}
+    `, '/src/application/virtual-list.js', prefix);
+    expect(meta.slots).toEqual([]);
+  });
+
+  it('still records the static slots of the same component', () => {
+    const meta = parseComponent(`
+      /**
+       * @tag arc-virtual-list
+       * @slot empty - Shown when there are no rows
+       * @slot item-\${index} - Per-row content
+       */
+      export class ArcVirtualList extends LitElement {
+        render() { return html\`<div><slot name="empty"></slot><slot name="item-\${this.i}"></slot></div>\`; }
+      }
+    `, '/src/application/virtual-list.js', prefix);
+    expect(meta.slots).toEqual(['empty']);
+  });
+});
+
+describe('slotsInMarkup separates seen from documented', () => {
+  it('records a JSDoc-only slot in slots but not in slotsInMarkup', () => {
+    const meta = parseComponent(`
+      /**
+       * @tag arc-shell
+       * @slot header - Documented, rendered by a base class
+       */
+      export class ArcShell extends LitElement {}
+    `, '/src/application/shell.js', prefix);
+    expect(meta.slots).toEqual(['header']);
+    expect(meta.slotsInMarkup).toEqual([]);
+  });
+
+  it('records both when the slot is real markup', () => {
+    const meta = parseComponent(`
+      /** @tag arc-shell */
+      export class ArcShell extends LitElement {
+        render() { return html\`<div><slot name="header"></slot></div>\`; }
+      }
+    `, '/src/application/shell.js', prefix);
+    expect(meta.slotsInMarkup).toEqual(['header']);
+  });
+});

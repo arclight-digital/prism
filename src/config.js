@@ -100,6 +100,7 @@ export function normalizeConfig(config) {
     );
   }
   config.acknowledge = config.acknowledge || [];
+  const unknownCodes = [];
   for (const [i, entry] of config.acknowledge.entries()) {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
       throw new Error(`prism: config.acknowledge[${i}] must be an object, e.g. { code: 'framework-reserved', tag: 'arc-column', prop: 'key' }`);
@@ -113,10 +114,19 @@ export function normalizeConfig(config) {
     }
     // `code` is required: an entry without one would accept every finding for a
     // component, which is a mute button rather than a decision.
-    if (!ACKNOWLEDGEABLE_CODES.includes(entry.code)) {
+    if (typeof entry.code !== 'string' || entry.code.length === 0) {
       throw new Error(
-        `prism: config.acknowledge[${i}].code is ${JSON.stringify(entry.code)} — must be one of ${ACKNOWLEDGEABLE_CODES.join(', ')}`
+        `prism: config.acknowledge[${i}].code is required — one of ${ACKNOWLEDGEABLE_CODES.join(', ')}`
       );
+    }
+    // An unrecognised code is ignored, not fatal. Codes are added and split
+    // between releases, so throwing here version-locks the config in both
+    // directions: a file valid for 2.7 made 2.6 refuse to start, which meant a
+    // rollback silently generated nothing and looked like the rollback hadn't
+    // helped. Being unable to bisect the generator is worse than tolerating an
+    // entry that does nothing, and `unknownCodes` keeps it visible.
+    if (!ACKNOWLEDGEABLE_CODES.includes(entry.code)) {
+      unknownCodes.push(entry.code);
     }
     if (entry.tag !== undefined && !VALID_TAG.test(entry.tag)) {
       throw new Error(`prism: config.acknowledge[${i}].tag "${entry.tag}" is not a valid custom-element tag`);
@@ -127,6 +137,12 @@ export function normalizeConfig(config) {
       }
     }
   }
+
+  // Entries naming a code this version doesn't know are dropped so they can't
+  // silently pre-waive a future finding, and surfaced so the drop is visible.
+  config.unknownAcknowledgeCodes = [...new Set(unknownCodes)];
+  config.acknowledge = config.acknowledge
+    .filter((e) => ACKNOWLEDGEABLE_CODES.includes(e.code));
 
   config.prefix = config.prefix || 'arc';
   config.ignore = config.ignore || [];

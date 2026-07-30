@@ -31,7 +31,13 @@
  */
 export function acceptsChildren(meta) {
   if (meta.hasDefaultSlot) return true;
-  return !(meta.slots?.length > 0);
+  // Gated on slots seen as real markup, not on documented ones. A `@slot header`
+  // tag proves a named slot exists; it says nothing about whether the default
+  // slot is rendered somewhere this parser never reads — a base class, a mixin,
+  // an imported helper. `slots` is the fallback for metas built before the
+  // distinction existed.
+  const observed = meta.slotsInMarkup ?? meta.slots;
+  return !(observed?.length > 0);
 }
 
 /**

@@ -299,17 +299,30 @@ describe('config.acknowledge', () => {
       .toThrow(/unknown field "reason"/);
   });
 
-  it('requires a known code', () => {
+  it('requires a code', () => {
     expect(() => normalizeConfig({ ...base, acknowledge: [{ tag: 'arc-column' }] }))
-      .toThrow(/must be one of/);
-    expect(() => normalizeConfig({ ...base, acknowledge: [{ code: 'nonsense' }] }))
-      .toThrow(/must be one of/);
+      .toThrow(/code is required/);
   });
 
-  it('refuses to waive its own staleness check', () => {
-    // Otherwise an allowlist could hide the fact that it had gone stale.
-    expect(() => normalizeConfig({ ...base, acknowledge: [{ code: 'unmatched-acknowledge' }] }))
-      .toThrow(/must be one of/);
+  it('ignores an unrecognised code instead of refusing to run', () => {
+    // Codes get added and split between releases. Throwing version-locks the
+    // config in both directions: a file written for 2.7 made 2.6 refuse to
+    // start, so a rollback generated nothing and looked like it hadn't helped.
+    // Being unable to bisect the generator is worse than a no-op entry.
+    const c = normalizeConfig({
+      ...base,
+      acknowledge: [{ code: 'doc-drift', tag: 'arc-chip' }, { code: 'from-a-newer-release' }],
+    });
+    expect(c.acknowledge.map((e) => e.code)).toEqual(['doc-drift']);
+    expect(c.unknownAcknowledgeCodes).toEqual(['from-a-newer-release']);
+  });
+
+  it('still refuses to waive its own staleness check', () => {
+    // Dropped rather than honoured — an allowlist must not be able to hide the
+    // fact that it has gone stale.
+    const c = normalizeConfig({ ...base, acknowledge: [{ code: 'unmatched-acknowledge' }] });
+    expect(c.acknowledge).toEqual([]);
+    expect(c.unknownAcknowledgeCodes).toEqual(['unmatched-acknowledge']);
   });
 
   it('validates the tag', () => {

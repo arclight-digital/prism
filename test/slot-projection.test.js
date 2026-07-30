@@ -162,3 +162,24 @@ describe('named slots reach the wrappers that can carry them', () => {
     expect(out).toContain('<slot name="start" />');
   });
 });
+
+describe('children survive a documented slot the parser cannot see rendered', () => {
+  it('keeps children when named slots are known only from JSDoc', () => {
+    // The residual form of the 2.7.0 bug: a component that documents `@slot
+    // header` while its default slot is rendered by a base class this parser
+    // never reads. Documented-only evidence must not justify deleting children.
+    const meta = parseComponent(`
+      /**
+       * @tag arc-shell
+       * @slot header - Rendered by the base class
+       */
+      export class ArcShell extends LitElement {}
+    `, '/src/application/shell.js', 'arc');
+    expect(meta.slots).toEqual(['header']);
+    expect(meta.slotsInMarkup).toEqual([]);
+    for (const [framework, { gen, marker }] of Object.entries(RENDERS_CHILDREN)) {
+      const out = readFileSync(gen(meta, cfg(`out/doc-${framework}`), tmpDir).path, 'utf-8');
+      expect(out, framework).toContain(marker);
+    }
+  });
+});

@@ -28,6 +28,8 @@
  * @property {string[]} events - custom event names
  * @property {Record<string, string[]>} eventDetails - event name → keys of its `detail` object
  * @property {string[]} slots - named slots the component exposes, in template order
+ * @property {string[]} slotsInMarkup - the subset seen as real `<slot name>` tags,
+ *   as opposed to known only from a `@slot` JSDoc tag
  * @property {boolean} hasDefaultSlot - whether it also has an unnamed <slot>
  * @property {'static'|'hybrid'|'interactive'} interactivity - how much JS the component needs
  * @property {string} hostDisplay - CSS display value from :host (e.g. 'block', 'inline-flex')
@@ -142,11 +144,11 @@ export function parseComponent(source, filePath, prefix = 'arc', overrides = {},
 
   // Named slots. Nothing recorded these before, so every wrapper projected a
   // single anonymous child list and named-slot content had nowhere to go.
-  const { slots, hasDefaultSlot } = extractSlots(template, source);
+  const { slots, slotsInMarkup, hasDefaultSlot } = extractSlots(template, source);
 
   return {
     tag, className, pascalName, tier, props, css, template, events, eventDetails,
-    slots, hasDefaultSlot, interactivity, classification, hostDisplay,
+    slots, slotsInMarkup, hasDefaultSlot, interactivity, classification, hostDisplay,
   };
 }
 
@@ -844,24 +846,39 @@ function extractSlots(template, source = '') {
   // every template in the file, including the branches.
   const haystack = `${template}\n${source}`;
 
-  const named = new Set();
+  // Names built at runtime — `name="item-${index}"` on a virtualised list — are
+  // one dynamic family, not a slot a wrapper can declare. Recording the literal
+  // text, or the `item-` prefix left after the expression, invents slots that
+  // don't exist.
+  const isDynamic = (name) => name.includes('${');
+
+  // Slots seen as real markup, kept apart from ones known only from JSDoc.
+  // Dropping `children` is gated on this stricter set: a `@slot header` tag
+  // proves a named slot exists, but says nothing about whether the default slot
+  // is rendered somewhere this parser can't see — a base class, a mixin, an
+  // imported helper. Only markup we actually read justifies removing anything.
+  const inMarkup = new Set();
   // Template first so the common case keeps render order; the source pass then
   // adds anything the template didn't show.
   for (const text of [template, haystack]) {
     for (const m of text.matchAll(/<slot\b[^>]*?\bname\s*=\s*["']([^"']+)["']/g)) {
-      named.add(m[1]);
+      if (!isDynamic(m[1])) inMarkup.add(m[1]);
     }
   }
+  const named = new Set(inMarkup);
   // `@slot name — description`. The name must start with a word character, so a
   // bare `@slot - the default content` documents the default slot and adds no
   // named one.
-  for (const m of source.matchAll(/@slot\s+([A-Za-z_][\w-]*)/g)) {
-    named.add(m[1]);
+  // `@slot item-${index}` documents a dynamic family; the name regex would stop
+  // at the `$` and record a phantom `item-` slot. JSDoc has no grammar for this,
+  // so anything followed by an expression is skipped rather than guessed at.
+  for (const m of source.matchAll(/@slot\s+([A-Za-z_][\w-]*)(\$\{)?/g)) {
+    if (!m[2]) named.add(m[1]);
   }
   // A `<slot>` with no name attribute anywhere in its tag is the default slot.
   const hasDefaultSlot = [...haystack.matchAll(/<slot\b([^>]*)>/g)]
     .some((m) => !/\bname\s*=/.test(m[1]));
-  return { slots: [...named], hasDefaultSlot };
+  return { slots: [...named], slotsInMarkup: [...inMarkup], hasDefaultSlot };
 }
 
 /**

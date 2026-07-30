@@ -27,6 +27,7 @@ import { generateHTML } from './generators/html.js';
 import { generateCSS, generateCSSBundle } from './generators/css.js';
 import { sweepOrphans } from './generators/prune.js';
 import { reservedCollisions, slotSnippetNames } from './generators/identifiers.js';
+import { verifyWrapper, describeMissing } from './verify.js';
 import {
   outputSummary, misclassified, formatBytes, strictFailures, groupDiagnostics,
   partitionAcknowledged,
@@ -171,11 +172,28 @@ function processFile(filePath, config) {
   // `<x slot="icon-left">` form has no prop to route to. The `{#snippet}` form
   // works; the attribute form silently doesn't, which is worth saying out loud.
   if (config.svelte && meta.slots.length > 0) {
-    const remapped = [...slotSnippetNames(meta.slots, meta.props)]
-      .filter(([slot, ident]) => slot !== ident);
-    for (const [slot, ident] of remapped) {
-      diagnostics.push({
-        code: 'slot-name-remapped',
+    const propNames = new Set(meta.props.map((p) => p.name));
+    for (const [slot, ident] of slotSnippetNames(meta.slots, meta.props)) {
+      if (slot === ident) continue;
+      // Two different causes, and only one of them has a fix worth making.
+      // `icon-left` isn't a legal identifier, so renaming the slot is reasonable
+      // advice. `eyebrow` is a perfectly good identifier that a prop of the same
+      // name already occupies — a deliberate pairing (prop for the string case,
+      // slot to override with markup) — and renaming it would put a trailing
+      // underscore in the public HTML API of six frameworks to satisfy one.
+      const collides = propNames.has(slot);
+      diagnostics.push(collides ? {
+        code: 'slot-name-collides-with-prop',
+        message:
+          `${meta.tag} slot "${slot}" shares its name with a prop, so the Svelte wrapper exposes ` +
+          `the snippet as \`${ident}\`. No action needed — the slot keeps its real name everywhere ` +
+          `else; Svelte consumers write \`{#snippet ${ident}()}\`.`,
+        file: filePath,
+        tag: meta.tag,
+        slot,
+        prop: ident,
+      } : {
+        code: 'slot-name-not-identifier',
         message:
           `${meta.tag} slot "${slot}" is not a valid identifier, so the Svelte wrapper exposes it ` +
           `as \`${ident}\`. \`{#snippet ${ident}()}\` reaches it; \`slot="${slot}"\` on a child does ` +
@@ -189,11 +207,52 @@ function processFile(filePath, config) {
     }
   }
 
+  // Wrappers that advertise `children` for an element with no default slot to
+  // put them in. Reported rather than acted on: the only evidence prism has is
+  // that it found no `<slot>` in this file, and a default slot rendered by a
+  // base class, a mixin or an imported helper looks exactly the same from here.
+  // 2.7.0 acted on evidence this weak and deleted content from 90 wrappers, so
+  // this states the case and leaves the call to someone who can see the whole
+  // component.
+  if (!meta.hasDefaultSlot && (meta.slotsInMarkup?.length ?? 0) === 0 && enabled.length > 0) {
+    diagnostics.push({
+      code: 'children-without-default-slot',
+      message:
+        `${meta.tag} has no default <slot> that prism could find, but its wrappers still accept ` +
+        '`children` — content passed there lands unassigned in the light DOM and renders nothing. ' +
+        'If the component really has no default slot, this is a type that lies; if it inherits one, ' +
+        'this is expected.',
+      file: filePath,
+      tag: meta.tag,
+    });
+  }
+
+  // Read each wrapper back and check it still carries what the component
+  // declares. Cheap, and it is the check whose absence let 2.7.0 ship wrappers
+  // with the default slot deleted — every input-side check passed, because the
+  // inputs were fine and the output was not.
+  const slotIdents = slotSnippetNames(meta.slots ?? [], meta.props);
+  const verifyGenerated = (framework, result) => {
+    if (!result?.written) return result;   // manual file — not ours to judge
+    const missing = verifyWrapper(framework, readFileSync(result.path, 'utf-8'), meta, slotIdents);
+    if (missing.length > 0) {
+      diagnostics.push({
+        code: 'wrapper-missing-slot',
+        message: describeMissing(framework, meta, missing),
+        file: result.path,
+        tag: meta.tag,
+        framework,
+        missing,
+      });
+    }
+    return result;
+  };
+
   const componentsDir = join(root, config.components);
 
   // React wrapper
   if (config.react) {
-    const reactResult = generateReact(meta, config.react, root);
+    const reactResult = verifyGenerated('react', generateReact(meta, config.react, root));
     if (reactResult.written) {
       console.log(`  react: ${relative(root, reactResult.path)}`);
     } else {
@@ -203,7 +262,7 @@ function processFile(filePath, config) {
 
   // Vue wrapper
   if (config.vue) {
-    const vueResult = generateVue(meta, config.vue, root);
+    const vueResult = verifyGenerated('vue', generateVue(meta, config.vue, root));
     if (vueResult.written) {
       console.log(`  vue:   ${relative(root, vueResult.path)}`);
     } else {
@@ -213,7 +272,7 @@ function processFile(filePath, config) {
 
   // Svelte wrapper
   if (config.svelte) {
-    const svelteResult = generateSvelte(meta, config.svelte, root);
+    const svelteResult = verifyGenerated('svelte', generateSvelte(meta, config.svelte, root));
     if (svelteResult.written) {
       console.log(`  svelte: ${relative(root, svelteResult.path)}`);
     } else {
@@ -223,7 +282,7 @@ function processFile(filePath, config) {
 
   // Angular wrapper
   if (config.angular) {
-    const angularResult = generateAngular(meta, config.angular, root);
+    const angularResult = verifyGenerated('angular', generateAngular(meta, config.angular, root));
     if (angularResult.written) {
       console.log(`  angular: ${relative(root, angularResult.path)}`);
     } else {
@@ -233,7 +292,7 @@ function processFile(filePath, config) {
 
   // Solid wrapper
   if (config.solid) {
-    const solidResult = generateSolid(meta, config.solid, root);
+    const solidResult = verifyGenerated('solid', generateSolid(meta, config.solid, root));
     if (solidResult.written) {
       console.log(`  solid:  ${relative(root, solidResult.path)}`);
     } else {
@@ -243,7 +302,7 @@ function processFile(filePath, config) {
 
   // Preact wrapper
   if (config.preact) {
-    const preactResult = generatePreact(meta, config.preact, root);
+    const preactResult = verifyGenerated('preact', generatePreact(meta, config.preact, root));
     if (preactResult.written) {
       console.log(`  preact: ${relative(root, preactResult.path)}`);
     } else {
@@ -428,6 +487,22 @@ function reportOutput(metas) {
  * sits in the config looking authoritative while auto-detection quietly decides
  * instead. Needs the full component set, so it runs alongside the sweep.
  */
+/**
+ * Acknowledge entries this version doesn't recognise. Reported, never fatal —
+ * see normalizeConfig. Not a strict failure: a rollback for bisection must be
+ * able to run a config written for a newer release.
+ */
+function warnUnknownAcknowledgeCodes(config) {
+  for (const code of config.unknownAcknowledgeCodes ?? []) {
+    diagnostics.push({
+      code: 'unknown-acknowledge-code',
+      message:
+        `config.acknowledge names "${code}", which this version of prism does not emit — ` +
+        'entry ignored. Expected if the config was written for a newer release.',
+    });
+  }
+}
+
 function warnUnmatchedOverrides(metas, config) {
   const seen = new Set(metas.map((m) => m.tag));
   for (const tag of Object.keys(config.interactivity)) {
@@ -451,13 +526,17 @@ function warnUnmatchedOverrides(metas, config) {
  */
 function flushDiagnostics(config) {
   const LABELS = {
-    'slot-name-remapped': 'slot names the Svelte wrapper had to rename to be a prop',
+    'slot-name-not-identifier': 'slot names that are not valid identifiers',
+    'slot-name-collides-with-prop': 'slots sharing a name with a prop — informational, no action',
     'framework-reserved': 'prop names a framework reserves — silently dropped at runtime',
     'doc-drift': 'documented @prop unions contradicted by the CSS or the default',
     'unportable-doc-type': 'documented @prop types naming symbols prism cannot import',
     'unusable-doc-type': 'documented @prop types prism could not emit safely',
     'unmatched-override': 'config.interactivity entries matching no component',
     'unmatched-acknowledge': 'config.acknowledge entries matching no finding',
+    'wrapper-missing-slot': 'generated wrappers missing an outlet the component declares',
+    'children-without-default-slot': 'wrappers accepting children for elements with no default slot',
+    'unknown-acknowledge-code': 'config.acknowledge codes this version does not emit — ignored',
     'invalid-tag': 'components skipped for an invalid tag name',
     'invalid-event': 'events dropped for an invalid name',
     'invalid-detail-key': 'detail keys dropped for an invalid name',
@@ -553,6 +632,7 @@ async function main() {
   if (singleFile) {
     console.log(`@arclux/prism — processing ${singleFile}`);
     processFile(resolve(root, singleFile), config);
+    warnUnknownAcknowledgeCodes(config);
     flushDiagnostics(config);
     console.log('Done.');
     return;
@@ -578,6 +658,7 @@ async function main() {
     }
 
     if (allMetas.length > 0) {
+      warnUnknownAcknowledgeCodes(config);
       warnUnmatchedOverrides(allMetas, config);
       flushDiagnostics(config);
       reportOutput(allMetas);
@@ -612,6 +693,7 @@ async function main() {
         }
       }
       if (sweep) {
+        warnUnknownAcknowledgeCodes(config);
         warnUnmatchedOverrides(metas, config);
         flushDiagnostics(config);
         reportOutput(metas);
@@ -681,6 +763,7 @@ async function main() {
     }
 
     if (allMetas.length > 0) {
+      warnUnknownAcknowledgeCodes(config);
       warnUnmatchedOverrides(allMetas, config);
       flushDiagnostics(config);
       reportOutput(allMetas);

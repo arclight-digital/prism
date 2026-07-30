@@ -108,9 +108,17 @@ Prism reports what it couldn't act on, but a caller that pipes stdout and only s
 prism: --strict — 1 issue(s) reported above.
 ```
 
-It fails on: a prop name the target framework reserves, doc drift (a documented union the CSS or the component's own default contradicts), a `config.interactivity` or `config.acknowledge` entry matching nothing, and any tag, event or detail key prism had to drop.
+It fails on: a generated wrapper missing an outlet the component declares, a prop name the target framework reserves, doc drift (a documented union the CSS or the component's own default contradicts), a `config.interactivity` or `config.acknowledge` entry matching nothing, and any tag, event or detail key prism had to drop.
+
+Codes it reports but does *not* fail on: `slot-name-collides-with-prop`, `children-without-default-slot`, `unknown-acknowledge-code`. Each is information rather than a defect, and an unrecognised acknowledge code in particular must never block a rollback.
 
 Skipped `interactive` components and the misclassification list are deliberately *not* strict failures. Both are routine on every run, and a check that can never pass gets removed. `--strict` is a no-op in watch mode.
+
+### Wrapper verification
+
+After writing each wrapper, prism reads it back and checks it still carries what the component declares: a component with a default slot must have an outlet for it, and Svelte and Vue must have one per named slot. React, Preact, Solid and Angular need no per-named-slot outlet — children go into the light DOM as-is and the browser does the slotting.
+
+This exists because 2.7.0 shipped wrappers with the default slot deleted. Every check prism had asked whether the *inputs* looked right; the inputs were fine and the output was not. A generated file that stops carrying a component's own slots is a generator bug, so the check belongs in the generator rather than in whatever repo happens to consume it. It reports `wrapper-missing-slot`, and it fails `--strict`.
 
 ### `config.acknowledge` — findings you've already decided about
 

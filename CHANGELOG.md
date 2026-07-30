@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.8.0 — 2026-07-29
+
+### Added
+
+- **Every generated wrapper is verified against its component before the run ends.** Prism's checks all asked whether the *inputs* looked right — a union the CSS contradicts, a prop name a framework reserves. None asked whether the file on disk still carried what the component can receive, which is exactly how 2.7.0 shipped wrappers with the default slot deleted: the parser was wrong, the generators faithfully did as told, every unit test passed, and nothing compared the result to the component.
+
+  `src/verify.js` reads each wrapper back and checks that a component with a default slot got an outlet for it, and that Svelte and Vue got one per named slot. React, Preact, Solid and Angular need no per-named-slot outlet — children are projected into the light DOM as-is and the browser does the slotting from the `slot` attribute. Deliberately the dumbest possible check: string matching against the file just produced, needing no framework toolchain and no consuming repo. Reported as `wrapper-missing-slot`, a `--strict` failure.
+
+  This is the invariant arc-ui wrote as `check-wrapper-slots.js`. It is a generator-side property, so it belongs in the generator.
+
+### Fixed
+
+- **`slot-name-remapped` conflated two causes and misadvised one.** It reported every remapped slot as "not a valid identifier". True for `icon-left` → `iconLeft`; false for `eyebrow` → `eyebrow_`, where the name is a perfectly good identifier already taken by a prop of the same name — a deliberate pairing (prop for the string case, slot to override with markup) on 8 arc-ui components. The advice to "rename the slot to `eyebrow_`" would have put a trailing underscore in the public HTML API of six frameworks to satisfy one. `slotSnippetNames` already receives the props, so prism always knew which case it was in.
+
+  Now two codes: `slot-name-not-identifier` (renaming is reasonable advice, still a `--strict` failure) and `slot-name-collides-with-prop` (informational, no action, not a strict failure).
+
+- **An unknown `acknowledge` code no longer refuses to run.** Codes get added and split between releases, so throwing version-locked the config in both directions: a file valid for 2.7 made 2.6 refuse to start, which meant a rollback silently generated nothing and looked like the rollback hadn't helped. Being unable to bisect the generator is worse than tolerating an entry that does nothing. Unrecognised codes are dropped and reported as `unknown-acknowledge-code` — not a strict failure, so a rollback can run a config written for a newer release. A missing `code` is still fatal, and `unmatched-acknowledge` still can't be waived.
+
+- **Dynamic slot names no longer invent phantom slots.** `arc-virtual-list` computes `name="item-${index}"` per row. The template scan recorded the literal text and the `@slot item-${index}` tag recorded the `item-` prefix left after the expression, so one dynamic family became two slots that don't exist. JSDoc has no grammar for this, so names containing an expression are now skipped rather than guessed at.
+
+- **A documented slot no longer justifies dropping `children`.** `ComponentMeta` gains `slotsInMarkup` — the slots seen as real `<slot name>` tags, as opposed to known only from a `@slot` tag. Dropping children is gated on that stricter set. A `@slot header` tag proves a named slot exists; it says nothing about whether the default slot is rendered somewhere the parser never reads (a base class, a mixin, an imported helper), and that combination was the residual form of the 2.7.0 bug.
+
+### Changed
+
+- **Wrappers that accept `children` for an element with no default slot are now reported**, as `children-without-default-slot`. Deliberately reported rather than acted on: the only evidence prism has is that it found no `<slot>` in that file, and an inherited default slot looks identical from here. 2.7.0 acted on evidence this weak and deleted content from 90 wrappers, so this states the case and leaves the call to someone who can see the whole component. Not a strict failure.
+
 ## 2.7.1 — 2026-07-29
 
 ### Fixed
