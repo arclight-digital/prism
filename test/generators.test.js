@@ -827,7 +827,7 @@ describe('reserved words in binding position', () => {
     expect(content).toContain('forProp = detail.for as');
   });
 
-  it('Preact renames the local and keeps the JSX attribute name', () => {
+  it('Preact renames the local and keeps the real key in the h() props', () => {
     const result = generatePreact(labelMeta, config('out/preact'), tmpDir);
     const content = readFileSync(result.path, 'utf-8');
 
@@ -836,7 +836,9 @@ describe('reserved words in binding position', () => {
     expect(pattern).toContain('for: forProp');
 
     expect(content).toContain('for?: string;');
-    expect(content).toContain('for={forProp}');
+    // The h() props object carries the real name — reserved words are legal
+    // object keys, so `for: forProp` is both the rename and the passthrough.
+    expect(content).toMatch(/h\('arc-label', \{ [^}]*\bfor: forProp\b/);
   });
 
   it('Vue reads props through the props object rather than bare identifiers', () => {

@@ -46,7 +46,7 @@ const RENDERS_CHILDREN = {
   svelte:  { gen: generateSvelte,  marker: '{@render children?.()}' },
   angular: { gen: generateAngular, marker: '<ng-content />' },
   solid:   { gen: generateSolid,   marker: '{local.children}' },
-  preact:  { gen: generatePreact,  marker: '{children}' },
+  preact:  { gen: generatePreact,  marker: ', children)' },
 };
 
 /**

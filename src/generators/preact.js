@@ -1,6 +1,12 @@
 /**
  * Generates Preact component (.tsx) files from ComponentMeta.
  * Native CE support — no wrapper library needed.
+ *
+ * The element is rendered with h('arc-x', …) rather than a JSX literal:
+ * preact's JSX.IntrinsicElements has no entry for custom elements, so the
+ * literal form fails to compile the moment the package is actually built,
+ * while h() accepts any string tag. Runtime output is identical — JSX
+ * desugars to the same call.
  */
 
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
@@ -50,7 +56,7 @@ export function generatePreact(meta, config, root) {
 
   const hasEvents = meta.events.length > 0;
 
-  lines.push(`import { type FunctionComponent } from 'preact';`);
+  lines.push(`import { h, type FunctionComponent } from 'preact';`);
   // Preact lowercases `on*` handler names, so hyphenated custom events like
   // `arc-click` can't be bound as JSX props — attach them via addEventListener
   // in a layout effect against a ref instead.
@@ -85,10 +91,14 @@ export function generatePreact(meta, config, root) {
   if (takesChildren) destructured.push('children');
   const destructStr = destructured.join(', ');
 
-  const attrs = meta.props.map((p) => `${p.name}={${locals.get(p.name)}}`).join(' ');
-  const attrStr = attrs ? ` ${attrs} {...rest}` : ' {...rest}';
+  // Object-literal keys keep the real prop name even when the local binding
+  // was renamed for a reserved word (`for: forProp` is a legal literal entry).
+  const propEntries = meta.props.map((p) => (
+    locals.get(p.name) === p.name ? p.name : `${p.name}: ${locals.get(p.name)}`
+  ));
 
   if (hasEvents) {
+    const propsObj = ['ref', ...propEntries, '...rest'].join(', ');
     lines.push(`export const ${meta.pascalName}: FunctionComponent<${meta.pascalName}Props> = ({ ${destructStr}, ...rest }) => {`);
     lines.push(`  const ref = useRef<HTMLElement>(null);`);
     lines.push(`  useLayoutEffect(() => {`);
@@ -105,18 +115,20 @@ export function generatePreact(meta, config, root) {
     }
     lines.push(`    return () => listeners.forEach(([name, fn]) => el.removeEventListener(name, fn));`);
     lines.push(`  }, [${meta.events.map(eventToHandlerName).join(', ')}]);`);
-    lines.push(`  return (`);
-    lines.push(`    <${meta.tag} ref={ref}${attrStr}>`);
-    if (takesChildren) lines.push(`      {children}`);
-    lines.push(`    </${meta.tag}>`);
-    lines.push(`  );`);
+    if (takesChildren) {
+      lines.push(`  return h('${meta.tag}', { ${propsObj} }, children);`);
+    } else {
+      lines.push(`  return h('${meta.tag}', { ${propsObj} });`);
+    }
     lines.push(`};`);
   } else {
-    lines.push(`export const ${meta.pascalName}: FunctionComponent<${meta.pascalName}Props> = ({ ${destructStr}, ...rest }) => (`);
-    lines.push(`  <${meta.tag}${attrStr}>`);
-    if (takesChildren) lines.push(`    {children}`);
-    lines.push(`  </${meta.tag}>`);
-    lines.push(`);`);
+    const propsObj = [...propEntries, '...rest'].join(', ');
+    lines.push(`export const ${meta.pascalName}: FunctionComponent<${meta.pascalName}Props> = ({ ${destructStr}, ...rest }) =>`);
+    if (takesChildren) {
+      lines.push(`  h('${meta.tag}', { ${propsObj} }, children);`);
+    } else {
+      lines.push(`  h('${meta.tag}', { ${propsObj} });`);
+    }
   }
   lines.push('');
 
