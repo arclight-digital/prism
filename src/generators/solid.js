@@ -52,13 +52,14 @@ export function generateSolid(meta, config, root) {
   lines.push('');
 
   // Solid's JSX has no IntrinsicElements entry for custom elements, so the
-  // tag below wouldn't compile without this augmentation. Scoped to this
-  // file's own tag; the props stay loose because the wrapper (not the JSX
-  // element) is the typed surface consumers touch.
+  // tag below wouldn't compile without this augmentation. Deliberately just
+  // Record<string, unknown> — the wrapper's props interface is the typed
+  // surface consumers touch, and intersecting HTMLAttributes here would be
+  // stricter than the passthrough members the wrapper itself declares.
   lines.push(`declare module 'solid-js' {`);
   lines.push(`  namespace JSX {`);
   lines.push(`    interface IntrinsicElements {`);
-  lines.push(`      '${meta.tag}': JSX.HTMLAttributes<HTMLElement> & Record<string, unknown>;`);
+  lines.push(`      '${meta.tag}': Record<string, unknown>;`);
   lines.push(`    }`);
   lines.push(`  }`);
   lines.push(`}`);
