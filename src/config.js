@@ -54,6 +54,22 @@ export function normalizeConfig(config) {
     }
   }
 
+  // Components kept out of every generated barrel. The use case is a component
+  // with a heavy optional dependency: a bundler resolves the dynamic imports of
+  // anything in its module graph, and a barrel drags every component into that
+  // graph, so one component's optional dep is everyone's required install.
+  // Excluded components are still generated — they are reached by their own
+  // subpath rather than the barrel.
+  if (config.barrelExclude !== undefined && !Array.isArray(config.barrelExclude)) {
+    throw new Error('prism: config.barrelExclude must be an array of custom-element tag names');
+  }
+  config.barrelExclude = config.barrelExclude || [];
+  for (const tag of config.barrelExclude) {
+    if (!VALID_TAG.test(tag)) {
+      throw new Error(`prism: config.barrelExclude entry "${tag}" is not a valid custom-element tag`);
+    }
+  }
+
   // Two-way binding overrides. Validated on the same terms and for the same
   // reason as `interactivity` above: bindings are derived by convention
   // (an event detail key matching a declared prop name), and the only way to

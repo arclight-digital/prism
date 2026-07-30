@@ -169,6 +169,29 @@ Kebab-case would be the wrong fix. Lit's Boolean converter is presence-based, so
 
 One consequence in Svelte: `$effect` doesn't run during SSR, so a camelCase prop is applied on hydration rather than appearing in the server HTML.
 
+### Keeping a component out of the barrels
+
+A bundler resolves the dynamic imports of every module in its graph, and a barrel
+puts every component in that graph. So one component's optional dependency becomes
+every consumer's required install — even for consumers who never touch it.
+
+`config.barrelExclude` names the components that stay out:
+
+```js
+barrelExclude: ['arc-code-block'],   // pulls in shiki
+```
+
+They are still generated, still verified, still get their own subpath — they are
+simply not re-exported from any barrel, in any framework, so nothing reaches them
+unless a consumer asks for them by name. Existing barrel entries are removed on
+the next full run: the file is still on disk, so nothing else here would drop it,
+and the append path never removes anything.
+
+The names to remove come from the metas rather than from the tag, so this cannot
+be wrong about how a name is spelled — the same reason `pruneBarrels` asks the
+filesystem instead of guessing. A component prism didn't see this run is left
+alone.
+
 ### Named slots
 
 A component with `<slot name="start">` gets a snippet prop per slot in the Svelte wrapper, and a forwarded `<slot name="start" />` in the Vue one. React, Preact, Solid and Angular need nothing — none of them treats `slot` as more than an attribute, so it reaches the element on its own.

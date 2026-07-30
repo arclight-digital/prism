@@ -364,7 +364,11 @@ function processFile(filePath, config) {
   }
 
   // Barrel updates (only for new components)
-  if (config.react && config.react.barrels) {
+  // …except a component config.barrelExclude keeps out of them: its dependency
+  // must not become everyone's just by being reachable from the barrel. The
+  // component is still generated; it is reached by its own subpath.
+  const inBarrels = !(config.barrelExclude ?? []).includes(meta.tag);
+  if (inBarrels && config.react && config.react.barrels) {
     const reactDir = join(root, config.react.outDir);
 
     const wcBarrel = updateWCBarrel(meta, componentsDir, config.prefix);
@@ -389,7 +393,7 @@ function processFile(filePath, config) {
   }
 
   // Vue barrel updates
-  if (config.vue && config.vue.barrels) {
+  if (inBarrels && config.vue && config.vue.barrels) {
     const vueDir = join(root, config.vue.outDir);
 
     const vueTierBarrel = updateVueTierBarrel(meta, vueDir);
@@ -404,7 +408,7 @@ function processFile(filePath, config) {
   }
 
   // Svelte barrel updates
-  if (config.svelte && config.svelte.barrels) {
+  if (inBarrels && config.svelte && config.svelte.barrels) {
     const svelteDir = join(root, config.svelte.outDir);
 
     const svelteTierBarrel = updateSvelteTierBarrel(meta, svelteDir);
@@ -419,7 +423,7 @@ function processFile(filePath, config) {
   }
 
   // Angular barrel updates
-  if (config.angular && config.angular.barrels) {
+  if (inBarrels && config.angular && config.angular.barrels) {
     const angularDir = join(root, config.angular.outDir);
 
     const angularTierBarrel = updateAngularTierBarrel(meta, angularDir);
@@ -434,7 +438,7 @@ function processFile(filePath, config) {
   }
 
   // Solid barrel updates
-  if (config.solid && config.solid.barrels) {
+  if (inBarrels && config.solid && config.solid.barrels) {
     const solidDir = join(root, config.solid.outDir);
 
     const solidTierBarrel = updateSolidTierBarrel(meta, solidDir);
@@ -449,7 +453,7 @@ function processFile(filePath, config) {
   }
 
   // Preact barrel updates
-  if (config.preact && config.preact.barrels) {
+  if (inBarrels && config.preact && config.preact.barrels) {
     const preactDir = join(root, config.preact.outDir);
 
     const preactTierBarrel = updatePreactTierBarrel(meta, preactDir);
@@ -642,7 +646,7 @@ function runSweep(metas, config) {
   // Barrels first, and unconditionally. Unlike an orphaned component file, a
   // stale barrel export breaks the build of whoever imports it (TS2307), so it
   // is not something to merely report and leave behind --prune.
-  for (const { path, removed } of pruneBarrels(config, root)) {
+  for (const { path, removed } of pruneBarrels(config, root, metas)) {
     console.log(`  barrel: ${relative(root, path)} (removed ${removed.join(', ')})`);
   }
 

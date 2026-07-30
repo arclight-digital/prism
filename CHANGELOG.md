@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.10.0 — 2026-07-30
+
+### Added
+
+- **`config.barrelExclude` — keep a component out of every generated barrel.** A bundler resolves the dynamic imports of every module in its graph, and a barrel puts every component in that graph. So a single component's optional dependency becomes every consumer's required install, whether or not they use it: arc-code-block reaches shiki, which is 13.6 MB, and it reached it for everyone.
+
+  ```js
+  barrelExclude: ['arc-code-block'],
+  ```
+
+  Excluded components are still generated and still verified — they are simply not re-exported from any barrel in any framework, so nothing reaches them unless a consumer imports them by name. Existing barrel entries are removed on the next full run, since the file is still on disk and nothing else would drop it. The names to remove come from the metas, not from the tag, so a component prism didn't see this run is left alone rather than removed on a guess.
+
 ## 2.9.0 — 2026-07-30
 
 ### Added

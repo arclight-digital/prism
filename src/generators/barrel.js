@@ -319,7 +319,20 @@ function sourceName(identifier) {
  * @param {string} root - project root
  * @returns {{ path: string, removed: string[] }[]} one entry per barrel changed
  */
-export function pruneBarrels(config, root) {
+export function pruneBarrels(config, root, metas = []) {
+  // Names belonging to a component config.barrelExclude keeps out of the
+  // barrels. Taken from the real metas rather than derived from the tag, so
+  // this can't be wrong about how a name is spelled — the same reason the rest
+  // of this function asks the filesystem instead of guessing.
+  const excludedNames = new Set();
+  const excluded = new Set(config.barrelExclude ?? []);
+  for (const meta of metas) {
+    if (!excluded.has(meta.tag)) continue;
+    excludedNames.add(meta.className);
+    excludedNames.add(meta.pascalName);
+    excludedNames.add(`${meta.pascalName}Props`);
+  }
+
   const dirs = [];
   if (config.components) dirs.push(join(root, config.components));
   for (const key of ['react', 'vue', 'svelte', 'angular', 'solid', 'preact']) {
@@ -331,9 +344,9 @@ export function pruneBarrels(config, root) {
     // Tier barrels before root barrels: a root barrel re-exports tier barrels by
     // identifier, so it has to see them already repaired.
     for (const tier of config.tiers) {
-      record(changed, pruneBarrelFile(join(dir, tier)));
+      record(changed, pruneBarrelFile(join(dir, tier), excludedNames));
     }
-    record(changed, pruneBarrelFile(dir));
+    record(changed, pruneBarrelFile(dir, excludedNames));
   }
   return changed;
 }
@@ -343,19 +356,25 @@ function record(changed, results) {
 }
 
 /** Repair every barrel file directly inside `dir`. */
-function pruneBarrelFile(dir) {
+function pruneBarrelFile(dir, excludedNames = new Set()) {
   if (!existsSync(dir)) return [];
   const out = [];
   for (const ext of SOURCE_EXTS) {
     const path = join(dir, `index${ext}`);
     if (!existsSync(path)) continue;
-    const result = repairBarrel(path, dir);
+    const result = repairBarrel(path, dir, excludedNames);
     if (result) out.push(result);
   }
   return out;
 }
 
-function repairBarrel(path, dir) {
+/** The name an importer sees: `default as CodeBlock` → `CodeBlock`. */
+function exportedName(identifier) {
+  const parts = identifier.split(/\s+as\s+/);
+  return parts[parts.length - 1].trim();
+}
+
+function repairBarrel(path, dir, excludedNames = new Set()) {
   const content = readFileSync(path, 'utf-8');
   const removed = [];
   const lines = [];
@@ -371,6 +390,21 @@ function repairBarrel(path, dir) {
     if (!resolved) {
       removed.push(specifier);
       continue;
+    }
+
+    // Kept out of the barrels by config.barrelExclude. The file still exists —
+    // the component is generated and reachable by its own subpath — so nothing
+    // else here would drop it, and the append path never removes anything.
+    if (excludedNames.size > 0) {
+      const names = identifiers.split(',').map((x) => x.trim()).filter(Boolean);
+      const keep = names.filter((n) => !excludedNames.has(exportedName(n)));
+      if (keep.length !== names.length) {
+        for (const n of names) {
+          if (excludedNames.has(exportedName(n))) removed.push(exportedName(n));
+        }
+        if (keep.length > 0) lines.push(line.replace(/\{[^}]*\}/, `{ ${keep.join(', ')} }`));
+        continue;
+      }
     }
 
     // Re-export of another barrel: the path is fine, so check that the names are

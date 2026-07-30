@@ -498,3 +498,74 @@ describe('pruneBarrels: output hygiene', () => {
     void toast;
   });
 });
+
+describe('barrelExclude: a component kept out of the barrels', () => {
+  let dir;
+
+  const toast = { tag: 'arc-toast', className: 'ArcToast', pascalName: 'Toast', tier: 'feedback' };
+  const code = {
+    tag: 'arc-code-block', className: 'ArcCodeBlock',
+    pascalName: 'CodeBlock', tier: 'typography',
+  };
+
+  const config = () => ({
+    prefix: 'arc',
+    tiers: ['feedback', 'typography'],
+    components: 'wc',
+    react: { outDir: 'react', barrels: true },
+    barrelExclude: ['arc-code-block'],
+  });
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'prism-bx-'));
+    for (const tier of ['feedback', 'typography']) {
+      mkdirSync(join(dir, 'wc', tier), { recursive: true });
+      mkdirSync(join(dir, 'react', tier), { recursive: true });
+    }
+    // Both components exist on disk — exclusion is not about a missing file.
+    for (const m of [toast, code]) {
+      updateWCBarrel(m, join(dir, 'wc'), 'arc');
+      updateWCRootBarrel(m, join(dir, 'wc'));
+      updateReactTierBarrel(m, join(dir, 'react'));
+      updateReactRootBarrel(m, join(dir, 'react'));
+      writeFileSync(join(dir, 'wc', m.tier, `${m.tag.replace(/^arc-/, '')}.js`), '// component\n');
+      writeFileSync(join(dir, 'react', m.tier, `${m.pascalName}.ts`), '// wrapper\n');
+    }
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const read = (...parts) => readFileSync(join(dir, ...parts), 'utf-8');
+
+  it('is removed from its tier barrel even though its file is right there', () => {
+    expect(read('react', 'typography', 'index.ts')).toContain('CodeBlock');
+
+    pruneBarrels(config(), dir, [toast, code]);
+
+    expect(read('react', 'typography', 'index.ts')).not.toContain('CodeBlock');
+  });
+
+  it('is removed from the root barrel too', () => {
+    pruneBarrels(config(), dir, [toast, code]);
+    expect(read('react', 'index.ts')).not.toContain('CodeBlock');
+    expect(read('wc', 'index.js')).not.toContain('ArcCodeBlock');
+  });
+
+  it('leaves every other component alone', () => {
+    pruneBarrels(config(), dir, [toast, code]);
+    expect(read('react', 'feedback', 'index.ts')).toContain('Toast');
+    expect(read('react', 'index.ts')).toContain('Toast');
+    expect(read('wc', 'index.js')).toContain('ArcToast');
+  });
+
+  it('does nothing without the config entry', () => {
+    pruneBarrels({ ...config(), barrelExclude: [] }, dir, [toast, code]);
+    expect(read('react', 'typography', 'index.ts')).toContain('CodeBlock');
+  });
+
+  it('needs the meta, not a guess at the name', () => {
+    // Names come from the metas, so a component whose meta this run never saw
+    // is left alone rather than removed by a derived-from-the-tag guess.
+    pruneBarrels(config(), dir, []);
+    expect(read('react', 'typography', 'index.ts')).toContain('CodeBlock');
+  });
+});
