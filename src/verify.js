@@ -46,7 +46,9 @@ const FRAMEWORKS = {
     namedOutlet: null,
   },
   preact: {
-    childrenMarker: '{children}',
+    // h('arc-x', props, children) — the JSX literal doesn't compile for
+    // custom elements, so the outlet is h()'s third argument.
+    childrenMarker: ', children)',
     namedOutlet: null,
   },
 };
