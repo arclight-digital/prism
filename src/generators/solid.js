@@ -51,6 +51,19 @@ export function generateSolid(meta, config, root) {
   lines.push(`import '${registerImport}';`);
   lines.push('');
 
+  // Solid's JSX has no IntrinsicElements entry for custom elements, so the
+  // tag below wouldn't compile without this augmentation. Scoped to this
+  // file's own tag; the props stay loose because the wrapper (not the JSX
+  // element) is the typed surface consumers touch.
+  lines.push(`declare module 'solid-js' {`);
+  lines.push(`  namespace JSX {`);
+  lines.push(`    interface IntrinsicElements {`);
+  lines.push(`      '${meta.tag}': JSX.HTMLAttributes<HTMLElement> & Record<string, unknown>;`);
+  lines.push(`    }`);
+  lines.push(`  }`);
+  lines.push(`}`);
+  lines.push('');
+
   // Props interface
   lines.push(`export interface ${meta.pascalName}Props {`);
   for (const prop of meta.props) {
