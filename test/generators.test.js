@@ -254,28 +254,27 @@ describe('generateAngular — two-way bindings', () => {
     expect(content).not.toContain('labelChange');
   });
 
-  it('routes bound events through a method that writes back and emits both', () => {
+  it('feeds xChange from a host listener, with no write-back state', () => {
     const content = generate(boundMeta);
-    expect(content).toContain('(arc-input)="this.onArcInput($event)"');
-    expect(content).toContain('onArcInput(event: CustomEvent) {');
-    expect(content).toContain('this.arcInput.emit(event);');
-    expect(content).toContain('const next = detail.value as number;');
-    expect(content).toContain('this.value = next;');
-    expect(content).toContain('this.valueChange.emit(next);');
+    expect(content).toContain(`'(arc-input)': '_onArcInput($event)'`);
+    expect(content).toContain('_onArcInput(event: CustomEvent) {');
+    expect(content).toContain('this.valueChange.emit(detail.value as number);');
+    // The element updates itself before dispatching and the input accessors
+    // read the live DOM property, so there is no `this.value = next` write-back.
+    expect(content).not.toContain('this.value =');
   });
 
-  it('leaves unbound events on the direct emit', () => {
+  it('generates no relay for unbound events — they fire natively from the host', () => {
     const content = generate({ ...boundMeta, events: ['arc-input', 'arc-focus'] });
-    expect(content).toContain('(arc-focus)="this.arcFocus.emit($event)"');
+    expect(content).not.toContain('arc-focus');
+    expect(content).not.toContain('arcFocus');
   });
 
   it('emits nothing extra when no detail key matches a prop', () => {
     const content = generate({ ...boundMeta, eventDetails: {} });
-    // The `arc-change` relay output is still `arcChange` — only the prop-derived
-    // `valueChange` should be absent.
     expect(content).not.toContain('valueChange');
-    expect(content).not.toContain('onArcInput(');
-    expect(content).toContain('(arc-input)="this.arcInput.emit($event)"');
+    expect(content).not.toContain('_onArc');
+    expect(content).not.toContain('host:');
   });
 
   it('honours a config.bindings exclude', () => {
@@ -287,13 +286,19 @@ describe('generateAngular — two-way bindings', () => {
 });
 
 describe('generateAngular', () => {
-  it('produces a .ts file with @Component', () => {
+  it('attaches to the custom element itself — no inner element, no schema', () => {
     const result = generateAngular(meta, config('out/angular'), tmpDir);
     expect(result.written).toBe(true);
     const content = readFileSync(result.path, 'utf-8');
     expect(content).toContain('@Component');
-    expect(content).toContain('CUSTOM_ELEMENTS_SCHEMA');
+    expect(content).toContain(`selector: '${meta.tag}'`);
     expect(content).toContain('@Input()');
+    expect(content).toContain('inject(ElementRef).nativeElement');
+    // The v2 shape rendered a second <arc-button> inside the template while
+    // the host upgraded too — the double render this design exists to kill.
+    expect(content).not.toContain(`<${meta.tag}`);
+    // Template holds no custom element any more, so no schema is needed.
+    expect(content).not.toContain('CUSTOM_ELEMENTS_SCHEMA');
   });
 });
 
@@ -404,12 +409,13 @@ describe('event wiring (regressions)', () => {
       generateAngular(arrMeta, config('out/angular'), tmpDir).path,
       'utf-8',
     );
-    expect(content).toContain('[items]="this.items"');
-    expect(content).toContain('[config]="this.config"');
-    expect(content).not.toContain('[attr.items]');
-    expect(content).not.toContain('[attr.config]');
-    // String props still bind as attributes
-    expect(content).toContain('[attr.label]="this.label"');
+    // Host binding forwards every prop as a DOM property — the attr-vs-prop
+    // matrix (arrays stringifying through toString, Lit rejecting the JSON) is
+    // retired wholesale.
+    expect(content).toContain('this._el.items = value;');
+    expect(content).toContain('this._el.config = value;');
+    expect(content).toContain('this._el.label = value;');
+    expect(content).not.toContain('[attr.');
   });
 
   it('Solid exposes a typed handler prop and binds via on: namespace', () => {
@@ -878,9 +884,11 @@ describe('reserved words in binding position', () => {
     expect(content).not.toContain('{forProp}');
   });
 
-  it('Angular qualifies template expressions so its own keywords parse', () => {
-    // `as` is a keyword in Angular's template grammar but not in JavaScript,
-    // so the class field is fine and only the expression needed qualifying.
+  it('Angular survives template-grammar keywords because nothing is templated', () => {
+    // `as` is a keyword in Angular's template grammar but not in JavaScript.
+    // The v2 generator qualified every template expression to dodge it; host
+    // binding has no template expressions, so the hazard class is gone —
+    // this pins that a keyword-named prop still generates a valid accessor.
     const textMeta = {
       ...labelMeta,
       tag: 'arc-text',
@@ -896,12 +904,11 @@ describe('reserved words in binding position', () => {
       generateAngular(textMeta, config('out/angular-kw'), tmpDir).path,
       'utf-8',
     );
-    expect(content).toContain('[attr.as]="this.as"');
-    expect(content).toContain('[wrap]="this.wrap"');
-    expect(content).toContain('(arc-change)="this.arcChange.emit($event)"');
-    expect(content).not.toContain('[attr.as]="as"');
-    // The class field keeps the real name — reserved words are legal there.
-    expect(content).toContain("@Input() as: string = 'p';");
+    // Reserved words are legal class-member names.
+    expect(content).toContain('@Input() set as(value: string) {');
+    expect(content).toContain('this._el.as = value;');
+    expect(content).toContain('this._el.wrap = value;');
+    expect(content).not.toContain('[attr.');
   });
 
   it('leaves ordinary prop names untouched', () => {
@@ -978,7 +985,9 @@ describe('documented prop types reach every wrapper', () => {
 
   it('Angular', () => {
     const c = readFileSync(generateAngular(chartMeta, config('out/a2'), tmpDir).path, 'utf-8');
-    expect(c).toContain(`@Input() series: ${DOC} = [];`);
+    expect(c).toContain(`@Input() set series(value: ${DOC}) {`);
+    expect(c).toContain(`get series(): ${DOC} {`);
+    expect(c).not.toContain('unknown[]');
   });
 
   it('Solid', () => {
@@ -1181,13 +1190,13 @@ describe('camelCase props reach the element as properties', () => {
     expect(c).not.toContain('bind:this');
   });
 
-  it('Angular binds them as properties, not attributes', () => {
+  it('Angular forwards them as properties — the lowercasing hazard is structural now', () => {
     const c = readFileSync(generateAngular(confirm(), config('out/cc-a'), tmpDir).path, 'utf-8');
-    // setAttribute lowercases, so [attr.confirmLabel] could never be observed.
-    expect(c).toContain('[confirmLabel]="this.confirmLabel"');
-    expect(c).not.toContain('[attr.confirmLabel]');
-    // Lowercase String props keep attribute binding, which reflects for CSS.
-    expect(c).toContain('[attr.heading]="this.heading"');
+    // setAttribute lowercases (confirmLabel → confirmlabel, unobserved by
+    // Lit); host binding never touches attributes, for any prop.
+    expect(c).toContain('this._el.confirmLabel = value;');
+    expect(c).toContain('this._el.heading = value;');
+    expect(c).not.toContain('[attr.');
   });
 
   it('Solid uses the prop: namespace for them', () => {
