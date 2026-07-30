@@ -154,6 +154,10 @@ export function typedDefault(prop, { arrayFactory = false } = {}) {
     return unquoted === 'true' || unquoted === 'false' ? unquoted : undefined;
   }
   if (val.startsWith('[') || val.startsWith('{')) {
+    // An array/object default against a prop not declared as one means the
+    // prop's documented type is wrong or missing — emitting the default
+    // would type-error, so the mismatch is dropped here and belongs upstream.
+    if (prop.type !== 'Array' && prop.type !== 'Object' && !prop.docType) return undefined;
     return arrayFactory ? `() => (${val})` : val;
   }
   if (prop.values?.length > 0 && !prop.values.includes(unquoted)) return undefined;
