@@ -84,17 +84,22 @@ function sfcConfig(ext) {
   };
 }
 
-/** Plain named-export config (Angular) — no type exports, no default-as. */
+/**
+ * Plain named-export config (Angular) — no type exports, no default-as.
+ * Extensionless specifiers on purpose: ngc emits .mjs whose imports keep the
+ * source specifier verbatim, so a '.js' suffix breaks ng-packagr's flatten
+ * step ("Could not resolve ./X.js from dist/esm2022/index.mjs").
+ */
 const angularConfig = {
   barrelExt: '.ts',
   existsCheck: (meta) => meta.pascalName,
   rootExistsCheck: (meta) => `{ ${meta.pascalName} }`,
   tierExportLines: (meta) =>
-    `export { ${meta.pascalName} } from './${meta.pascalName}.js';`,
+    `export { ${meta.pascalName} } from './${meta.pascalName}';`,
   separator: '\n',
   rootStrategy: 'root-append',
   rootExportLines: (meta) =>
-    `export { ${meta.pascalName} } from './${meta.tier}/${meta.pascalName}.js';`,
+    `export { ${meta.pascalName} } from './${meta.tier}/${meta.pascalName}';`,
 };
 
 const FRAMEWORK_CONFIGS = {

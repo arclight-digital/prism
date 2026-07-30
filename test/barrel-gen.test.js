@@ -231,7 +231,9 @@ describe('Angular tier barrel', () => {
     const result = updateAngularTierBarrel(meta, tmpDir);
     expect(result.updated).toBe(true);
     const content = readFileSync(join(tierDir, 'index.ts'), 'utf-8');
-    expect(content).toContain("export { Button } from './Button.js'");
+    // Extensionless: ngc emits .mjs keeping specifiers verbatim, so a '.js'
+    // suffix breaks ng-packagr's flatten step.
+    expect(content).toContain("export { Button } from './Button';");
     // Angular doesn't export types separately
     expect(content).not.toContain('ButtonProps');
   });
@@ -244,7 +246,7 @@ describe('Angular root barrel', () => {
     const result = updateAngularRootBarrel(meta, tmpDir);
     expect(result.updated).toBe(true);
     const content = readFileSync(join(tmpDir, 'index.ts'), 'utf-8');
-    expect(content).toContain("export { Button } from './reactive/Button.js'");
+    expect(content).toContain("export { Button } from './reactive/Button';");
   });
 });
 
