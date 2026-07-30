@@ -14,17 +14,24 @@
  * content passed there vanished silently. Omitting the member makes it a type
  * error instead.
  *
- * The absence of a default slot is only trusted when a template was actually
- * parsed. An unextractable render() yields an empty template, which would look
- * identical to "this component has no slots" and would strip children from
- * wrappers that need them — a worse failure than the one being fixed.
+ * The rule is deliberately asymmetric, because the two ways of being wrong are
+ * not remotely equal. Keeping children a component can't use is a no-op you
+ * discover by reading. Dropping children a component *can* use deletes rendered
+ * content — which is exactly what 2.7.0 did to 111 components, because it read
+ * "no default slot found" as "no default slot exists". Those are different
+ * claims, and only the second one justifies removing anything.
+ *
+ * So children are dropped only on positive evidence: slots were found, and none
+ * of them was the default. Finding no slots at all is not evidence a component
+ * has none — it is equally consistent with having failed to look in the right
+ * place — so that case keeps children.
  *
  * @param {import('../parser.js').ComponentMeta} meta
  * @returns {boolean}
  */
 export function acceptsChildren(meta) {
-  if (!meta.template) return true;
-  return meta.hasDefaultSlot !== false;
+  if (meta.hasDefaultSlot) return true;
+  return !(meta.slots?.length > 0);
 }
 
 /**

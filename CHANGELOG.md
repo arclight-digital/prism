@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.7.1 — 2026-07-29
+
+### Fixed
+
+- **2.7.0 deleted the default slot from wrappers of 111 components.** A regression introduced by 2.7.0's own slot handling, and a runtime break rather than a typing one: any component whose only slot was the default rendered nothing at all. Svelte lost `{@render children?.()}`, Solid lost `{local.children}`, Preact lost `{children}`; React lost only the `children` type from 87 interfaces (`@lit/react` forwards children itself) but still broke TypeScript builds. Vue and Angular were unaffected, because `<slot>` and `<ng-content>` are passthrough.
+
+  `extractTemplate` deliberately skips nested `` html`…` `` inside `${}` — it exists to produce HTML examples, not a complete slot inventory. So a default slot in a conditional branch (`${this.loading ? html`<spinner>` : html`<slot></slot>`}`), in a helper method, or behind an `open` guard never appears in `meta.template`. 2.7.0 read that absence as *"this component has no default slot"* and dropped children accordingly. Those are different claims. 2.7.0's `@slot` JSDoc support then made it fire widely, by populating the named-slot list from documentation while the default-slot check still consulted only the lossy template — so a documented component looked named-slots-only.
+
+  Two independent fixes, either of which alone would have prevented the break:
+
+  - **Slots are detected from the component source, not the extracted template.** The source contains every template in the file, including the branches extraction skips.
+  - **Children are dropped only on positive evidence** — slots were found, and none was the default. Finding no slots is not evidence a component has none; it is equally consistent with having failed to look in the right place. Only one of those justifies removing anything, so neither does.
+
+### Added
+
+- **`test/slot-projection.test.js` — the invariant that was missing.** Every case starts from component *source* and runs parser and generator together, asserting that whatever a component can receive, every wrapper can pass. Nine real-world template shapes cover the ones extraction handles by luck: conditional branches, helper methods, local template variables, both arms of a ternary, `@slotchange` handlers, multiline templates.
+
+  The tests that existed when 2.7.0 shipped all passed, because they built `meta` by hand with `hasDefaultSlot` set to whatever the assertion expected. They proved the generators did as they were told; nothing proved the parser was telling them the truth about real source. The bug lived in that seam, so the tests now live there too.
+
 ## 2.7.0 — 2026-07-29
 
 ### Fixed

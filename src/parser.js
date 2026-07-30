@@ -835,9 +835,22 @@ function extractTemplate(source, defaults = {}) {
  * @returns {{ slots: string[], hasDefaultSlot: boolean }}
  */
 function extractSlots(template, source = '') {
+  // Scanned over the raw source, not just the extracted template.
+  // `extractTemplate` deliberately skips nested html`` inside `${}`, so a
+  // default slot in a conditional branch —
+  // `${this.loading ? html`<spinner>` : html`<slot></slot>`}` — does not appear
+  // there at all. Reading that absence as "this component has no default slot"
+  // is what deleted children from 111 wrappers in 2.7.0. The source contains
+  // every template in the file, including the branches.
+  const haystack = `${template}\n${source}`;
+
   const named = new Set();
-  for (const m of template.matchAll(/<slot\b[^>]*?\bname\s*=\s*["']([^"']+)["']/g)) {
-    named.add(m[1]);
+  // Template first so the common case keeps render order; the source pass then
+  // adds anything the template didn't show.
+  for (const text of [template, haystack]) {
+    for (const m of text.matchAll(/<slot\b[^>]*?\bname\s*=\s*["']([^"']+)["']/g)) {
+      named.add(m[1]);
+    }
   }
   // `@slot name — description`. The name must start with a word character, so a
   // bare `@slot - the default content` documents the default slot and adds no
@@ -846,7 +859,7 @@ function extractSlots(template, source = '') {
     named.add(m[1]);
   }
   // A `<slot>` with no name attribute anywhere in its tag is the default slot.
-  const hasDefaultSlot = [...template.matchAll(/<slot\b([^>]*)>/g)]
+  const hasDefaultSlot = [...haystack.matchAll(/<slot\b([^>]*)>/g)]
     .some((m) => !/\bname\s*=/.test(m[1]));
   return { slots: [...named], hasDefaultSlot };
 }

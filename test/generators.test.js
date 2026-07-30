@@ -1239,10 +1239,12 @@ describe('children only where there is a default slot', () => {
     expect(c).not.toContain('<ng-content />');
   });
 
-  it('keeps children when the template could not be parsed', () => {
-    // An unextractable render() looks identical to "no slots"; stripping
-    // children there would be a worse bug than the one being fixed.
-    const unknown = { ...noSlot, template: '', hasDefaultSlot: false };
+  it('keeps children when no slot was found at all', () => {
+    // Absence of evidence. Finding no slots is equally consistent with a
+    // component having none and with having failed to see them, and only one of
+    // those justifies deleting content — so neither does. See
+    // test/slot-projection.test.js for this rule exercised from real source.
+    const unknown = { ...noSlot, template: '', slots: [], hasDefaultSlot: false };
     const c = readFileSync(generateSvelte(unknown, config('out/ns-u'), tmpDir).path, 'utf-8');
     expect(c).toContain('children?: Snippet;');
     expect(c).toContain('{@render children?.()}');
