@@ -16,7 +16,7 @@ const GOOD = {
   svelte:  '<arc-button>\n  {@render children?.()}\n</arc-button>',
   angular: 'template: `<arc-button><ng-content /></arc-button>`,',
   solid:   '<arc-button>{local.children}</arc-button>',
-  preact:  '<arc-button>{children}</arc-button>',
+  preact:  "h('arc-button', { ...rest }, children)",
 };
 
 describe('default slot', () => {

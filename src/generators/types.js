@@ -129,3 +129,35 @@ export function tsType(prop) {
     default:        return 'string';
   }
 }
+
+/**
+ * A wrapper default must be a value the prop's declared type admits, or
+ * nothing. The source default is documentation text, and two shapes of it
+ * used to reach wrappers verbatim and only failed once the packages grew a
+ * compile step: a Number prop documented as '0' (string literal against a
+ * number type) and a union prop whose neutral default ('') isn't a union
+ * member. The element itself always carries the real default, so omitting an
+ * unrepresentable one changes nothing at runtime.
+ *
+ * `arrayFactory` wraps array/object defaults in `() => (…)` for frameworks
+ * that require fresh references per instance (Vue's withDefaults).
+ */
+export function typedDefault(prop, { arrayFactory = false } = {}) {
+  if (!prop.default) return undefined;
+  const val = prop.default;
+  const unquoted = val.replace(/^['"]|['"]$/g, '');
+  if (prop.type === 'Number') {
+    const n = Number(unquoted);
+    return Number.isNaN(n) ? undefined : String(n);
+  }
+  if (prop.type === 'Boolean') {
+    return unquoted === 'true' || unquoted === 'false' ? unquoted : undefined;
+  }
+  if (val.startsWith('[') || val.startsWith('{')) {
+    return arrayFactory ? `() => (${val})` : val;
+  }
+  if (prop.values?.length > 0 && !prop.values.includes(unquoted)) return undefined;
+  if (val.startsWith("'") || val.startsWith('"')) return val;
+  if (!Number.isNaN(Number(val))) return val;
+  return `'${val}'`;
+}
