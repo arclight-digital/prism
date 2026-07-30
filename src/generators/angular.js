@@ -69,12 +69,23 @@ export function generateAngular(meta, config, root) {
   const boundProps = boundPropNames(twoWay);
   const propTypes = new Map(meta.props.map((p) => [p.name, tsType(p)]));
 
-  // Imports
+  // Imports. A component class can share its name with an Angular symbol
+  // (arc-input's wrapper is `Input`, the decorator's name), so any colliding
+  // import is aliased with an Ng prefix — the alias is a plain import binding,
+  // which ngtsc resolves like the original.
   const angularImports = ['Component', 'ElementRef', 'inject'];
   if (meta.props.length > 0) angularImports.push('Input');
   if (boundProps.size > 0) angularImports.push('Output', 'EventEmitter');
 
-  lines.push(`import { ${angularImports.join(', ')} } from '@angular/core';`);
+  const ngName = new Map(angularImports.map((name) => [
+    name,
+    name === meta.pascalName ? `Ng${name}` : name,
+  ]));
+  const importSpecifiers = angularImports.map((name) =>
+    ngName.get(name) === name ? name : `${name} as ${ngName.get(name)}`
+  );
+
+  lines.push(`import { ${importSpecifiers.join(', ')} } from '@angular/core';`);
   lines.push(`import { ${meta.className} } from '${registerImport}';`);
   lines.push('');
 
@@ -91,7 +102,7 @@ export function generateAngular(meta, config, root) {
   );
 
   // @Component decorator
-  lines.push(`@Component({`);
+  lines.push(`@${ngName.get('Component')}({`);
   lines.push(`  selector: '${meta.tag}',`);
   lines.push(`  standalone: true,`);
   lines.push(`  template: \`${template}\`,`);
@@ -102,7 +113,7 @@ export function generateAngular(meta, config, root) {
   }
   lines.push(`})`);
   lines.push(`export class ${meta.pascalName} {`);
-  lines.push(`  private readonly _el: ${meta.className} = inject(ElementRef).nativeElement;`);
+  lines.push(`  private readonly _el: ${meta.className} = ${ngName.get('inject')}(${ngName.get('ElementRef')}).nativeElement;`);
 
   // @Input() accessor pairs forwarding to the host element's properties. No
   // local defaults: an unbound input never fires the setter and the element
@@ -110,7 +121,7 @@ export function generateAngular(meta, config, root) {
   for (const prop of meta.props) {
     const type = propTypes.get(prop.name);
     lines.push('');
-    lines.push(`  @Input() set ${prop.name}(value: ${type}) {`);
+    lines.push(`  @${ngName.get('Input')}() set ${prop.name}(value: ${type}) {`);
     lines.push(`    this._el.${prop.name} = value;`);
     lines.push(`  }`);
     lines.push(`  get ${prop.name}(): ${type} {`);
@@ -122,7 +133,7 @@ export function generateAngular(meta, config, root) {
   for (const prop of meta.props) {
     if (boundProps.has(prop.name)) {
       lines.push('');
-      lines.push(`  @Output() ${prop.name}Change = new EventEmitter<${propTypes.get(prop.name)}>();`);
+      lines.push(`  @${ngName.get('Output')}() ${prop.name}Change = new ${ngName.get('EventEmitter')}<${propTypes.get(prop.name)}>();`);
     }
   }
 
