@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.8.1 — 2026-07-30
+
+### Fixed
+
+- **A deleted component stopped being exported from the barrels.** Barrel updates were append-only by design — the right shape for watch and single-file mode, where the generator sees one meta and must not judge the rest of the barrel on that basis. The cost was that a removed component's export lines survived forever, pointing at a file the generators had stopped writing:
+
+  ```
+  error TS2307: Cannot find module './ToastManager.js'
+  ```
+
+  That breaks the build of whoever imports the barrel rather than prism's own, and only when someone typechecks the wrapper package — so it surfaced as a mysterious failure in a consuming repo long after the deletion. The barrels in one project had last been written eleven days before the components they described.
+
+  `pruneBarrels` now runs on every full discovery pass and repairs them. Unlike `sweepOrphans` it is *not* gated behind `--prune`: an orphaned component file is untidy, but an unbuildable barrel is a bug.
+
+  Decided by **resolution**, never by naming convention. The first version of this rebuilt the expected specifier set from the metas and deleted anything absent from it, which quietly stripped 136 working exports from a project whose web-component barrels point at `./accordion.register.js` — a filename this generator would never write, in a barrel it does not generate at all. Asking the filesystem cannot be wrong about that, and it needs no metas: a specifier either resolves or it does not.
+
+  Two line shapes are handled. A component export names a file that must exist and is dropped whole when it does not, allowing for the fact that a barrel says `./Toast.js` for `Toast.ts`, Angular omits the extension, and a directory specifier means that directory's index. A barrel-to-barrel re-export (`from './feedback/index.js'`) resolves either way, so its *identifier list* is filtered against what the target still exports and the line only disappears once nothing survives — that is the shape a web-component root barrel uses, and nothing else can catch a name a tier barrel stopped exporting.
+
+  Tier barrels are repaired before root barrels, so a root barrel sees them already correct. A prune that changes nothing writes nothing, and one that does trims to a single trailing newline like the append path, so it never shows up in a consumer's diff as whitespace.
+
 ## 2.8.0 — 2026-07-29
 
 ### Added

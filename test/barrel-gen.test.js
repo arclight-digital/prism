@@ -17,6 +17,7 @@ import {
   updateSolidRootBarrel,
   updatePreactTierBarrel,
   updatePreactRootBarrel,
+  pruneBarrels,
 } from '../src/generators/barrel.js';
 
 const meta = {
@@ -303,5 +304,197 @@ describe('Preact root barrel', () => {
     const content = readFileSync(join(tmpDir, 'index.ts'), 'utf-8');
     expect(content).toContain("export { Button } from './reactive/Button.js'");
     expect(content).toContain("export type { ButtonProps } from './reactive/Button.js'");
+  });
+});
+
+describe('pruneBarrels: a removed component stops being exported', () => {
+  let dir;
+
+  const button = { tag: 'arc-button', className: 'ArcButton', pascalName: 'Button', tier: 'input' };
+  const toast = { tag: 'arc-toast', className: 'ArcToast', pascalName: 'Toast', tier: 'feedback' };
+  const manager = {
+    tag: 'arc-toast-manager', className: 'ArcToastManager',
+    pascalName: 'ToastManager', tier: 'feedback',
+  };
+
+  const config = () => ({
+    prefix: 'arc',
+    tiers: ['input', 'feedback'],
+    components: 'wc',
+    react: { outDir: 'react', barrels: true },
+  });
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'prism-prune-'));
+    for (const tier of ['input', 'feedback']) {
+      mkdirSync(join(dir, 'wc', tier), { recursive: true });
+      mkdirSync(join(dir, 'react', tier), { recursive: true });
+    }
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  /**
+   * Reproduce the state the append-only path leaves behind: barrels exporting
+   * every component, and files on disk for only the ones that still exist.
+   */
+  function seed(all, present = all) {
+    for (const m of all) {
+      updateWCBarrel(m, join(dir, 'wc'), 'arc');
+      updateWCRootBarrel(m, join(dir, 'wc'));
+      updateReactTierBarrel(m, join(dir, 'react'));
+      updateReactRootBarrel(m, join(dir, 'react'));
+    }
+    for (const m of present) {
+      const wcFile = m.tag.replace(/^arc-/, '');
+      writeFileSync(join(dir, 'wc', m.tier, `${wcFile}.js`), '// component\n');
+      writeFileSync(join(dir, 'react', m.tier, `${m.pascalName}.ts`), '// wrapper\n');
+    }
+  }
+
+  const read = (...parts) => readFileSync(join(dir, ...parts), 'utf-8');
+
+  it('drops a tier-barrel export whose file is gone', () => {
+    seed([toast, manager], [toast]);
+    expect(read('react', 'feedback', 'index.ts')).toContain('ToastManager');
+
+    pruneBarrels(config(), dir);
+
+    const barrel = read('react', 'feedback', 'index.ts');
+    expect(barrel).not.toContain('ToastManager');
+    expect(barrel, 'the surviving component is untouched').toContain("from './Toast.js'");
+  });
+
+  it('resolves a .js specifier to its .ts file rather than calling it broken', () => {
+    // The wrapper is Toast.ts; the barrel says './Toast.js'. Treating that as
+    // unresolvable would delete every working export in the package.
+    seed([toast], [toast]);
+    const before = read('react', 'feedback', 'index.ts');
+    expect(pruneBarrels(config(), dir)).toEqual([]);
+    expect(read('react', 'feedback', 'index.ts')).toBe(before);
+  });
+
+  it('drops the matching type export too', () => {
+    seed([toast, manager], [toast]);
+    pruneBarrels(config(), dir);
+    const barrel = read('react', 'feedback', 'index.ts');
+    expect(barrel).not.toContain('ToastManagerProps');
+    expect(barrel).toContain('ToastProps');
+  });
+
+  it('drops a root-barrel export whose tier-qualified file is gone', () => {
+    seed([toast, manager], [toast]);
+    expect(read('react', 'index.ts')).toContain('feedback/ToastManager.js');
+
+    pruneBarrels(config(), dir);
+    expect(read('react', 'index.ts')).not.toContain('ToastManager');
+  });
+
+  it('filters identifiers out of a barrel-to-barrel re-export', () => {
+    // The WC root barrel re-exports whole tier barrels, so the path resolves
+    // either way — only the identifier list can reveal the removal.
+    seed([toast, manager], [toast]);
+    expect(read('wc', 'index.js')).toContain('ArcToastManager');
+
+    pruneBarrels(config(), dir);
+
+    const after = read('wc', 'index.js');
+    expect(after).not.toContain('ArcToastManager');
+    expect(after, 'the tier re-export survives with its live names').toContain('ArcToast');
+    expect(after).toContain("from './feedback/index.js'");
+  });
+
+  it('removes a re-export line once none of its names survive', () => {
+    seed([manager], []);
+    pruneBarrels(config(), dir);
+    expect(read('wc', 'index.js')).not.toContain('feedback/index.js');
+  });
+
+  it('leaves a barrel with nothing stale completely alone', () => {
+    seed([button, toast]);
+    const before = {
+      wc: read('wc', 'index.js'),
+      react: read('react', 'index.ts'),
+      tier: read('react', 'feedback', 'index.ts'),
+    };
+
+    expect(pruneBarrels(config(), dir), 'reports no change').toEqual([]);
+
+    expect(read('wc', 'index.js')).toBe(before.wc);
+    expect(read('react', 'index.ts')).toBe(before.react);
+    expect(read('react', 'feedback', 'index.ts')).toBe(before.tier);
+  });
+
+  it('never judges an export by its naming convention', () => {
+    // Regression guard for the first version of this pass, which rebuilt the
+    // expected specifiers from the metas and stripped 136 working exports from a
+    // project whose barrels point at './accordion.register.js' — a filename this
+    // generator would never write, in a barrel it does not generate.
+    writeFileSync(join(dir, 'wc', 'input', 'button.register.js'), '// registration\n');
+    writeFileSync(
+      join(dir, 'wc', 'input', 'index.js'),
+      "// Auto-generated by @arclux/prism — do not edit manually\n"
+      + "export { ArcButton } from './button.register.js';\n",
+    );
+
+    expect(pruneBarrels(config(), dir)).toEqual([]);
+    expect(read('wc', 'input', 'index.js')).toContain('button.register.js');
+  });
+
+  it('keeps the generated header', () => {
+    seed([toast, manager], [toast]);
+    pruneBarrels(config(), dir);
+    expect(read('react', 'feedback', 'index.ts'))
+      .toContain('Auto-generated by @arclux/prism');
+  });
+
+  it('reports what it removed, per barrel', () => {
+    seed([toast, manager], [toast]);
+    const changed = pruneBarrels(config(), dir);
+
+    expect(changed.length).toBeGreaterThan(0);
+    const all = changed.flatMap((c) => c.removed);
+    expect(all.some((n) => /ToastManager/.test(n))).toBe(true);
+    expect(all.some((n) => n === 'Toast'), 'never the survivor').toBe(false);
+  });
+
+  it('does not touch a framework whose barrels are disabled', () => {
+    seed([toast, manager], [toast]);
+    const cfg = config();
+    cfg.react.barrels = false;
+    const before = read('react', 'feedback', 'index.ts');
+
+    pruneBarrels(cfg, dir);
+    expect(read('react', 'feedback', 'index.ts')).toBe(before);
+  });
+});
+
+describe('pruneBarrels: output hygiene', () => {
+  let dir;
+  const toast = { tag: 'arc-toast', className: 'ArcToast', pascalName: 'Toast', tier: 'feedback' };
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'prism-prune-ws-'));
+    mkdirSync(join(dir, 'react', 'feedback'), { recursive: true });
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('leaves no trailing blank line behind', () => {
+    // A prune that changes whitespace shows up in a consumer's diff as noise and
+    // makes a generate-diff CI gate fail for no real reason.
+    const barrel = join(dir, 'react', 'feedback', 'index.ts');
+    writeFileSync(
+      barrel,
+      "// Auto-generated by @arclux/prism — do not edit manually\n\n"
+      + "export { Toast } from './Toast.js';\n"
+      + "export { Gone } from './Gone.js';\n",
+    );
+    writeFileSync(join(dir, 'react', 'feedback', 'Toast.ts'), '// wrapper\n');
+
+    pruneBarrels({ prefix: 'arc', tiers: ['feedback'], react: { outDir: 'react', barrels: true } }, dir);
+
+    const after = readFileSync(barrel, 'utf-8');
+    expect(after.endsWith("from './Toast.js';\n")).toBe(true);
+    expect(after).not.toMatch(/\n\n$/);
+    void toast;
   });
 });

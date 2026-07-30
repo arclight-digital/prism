@@ -47,6 +47,7 @@ import {
   updateSolidRootBarrel,
   updatePreactTierBarrel,
   updatePreactRootBarrel,
+  pruneBarrels,
 } from './generators/barrel.js';
 
 // ── Parse CLI args ──────────────────────────────────────────
@@ -619,6 +620,13 @@ function writeReportJson({ active, accepted, stale }) {
  * except one would look deleted.
  */
 function runSweep(metas, config) {
+  // Barrels first, and unconditionally. Unlike an orphaned component file, a
+  // stale barrel export breaks the build of whoever imports it (TS2307), so it
+  // is not something to merely report and leave behind --prune.
+  for (const { path, removed } of pruneBarrels(config, root)) {
+    console.log(`  barrel: ${relative(root, path)} (removed ${removed.join(', ')})`);
+  }
+
   const { stale, removed } = sweepOrphans(metas, config, root, { apply: prune });
   if (stale.length === 0) return;
   console.log(prune ? '\nRemoved orphaned output:' : '\nOrphaned output (no matching component):');
