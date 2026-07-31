@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.10.1 — 2026-07-30
+
+### Fixed
+
+- **A commented at-rule was emitted with the component selector in front of it.** `shadowToLight` decides whether a `{`-prelude is an at-rule or a selector list by testing whether it starts with `@`. Comments are copied into that same prelude buffer, so a comment sitting above the at-rule made it start with `/*` instead — the at-rule fell through to the selector branch and was scoped like a selector:
+
+  ```css
+  /* Collapse below the nav breakpoint. */
+  .arc-top-bar @media (max-width: 900px) { … }
+  ```
+
+  A selector prefixing an at-rule is invalid, so browsers drop the block whole. In one design system that silently disabled the responsive breakpoint of a top bar in the standalone CSS package — the query was present in the file, and had never once applied. The bug is invisible in review precisely because the comment explaining the query is what breaks it.
+
+  Its reach is wider than media queries. Because the misclassified at-rule never pushed its name onto the context stack, a commented `@keyframes` also lost its keyframes context, and its `0%` / `100%` steps were scoped as if they were selectors.
+
+  The prelude is now classified after skipping leading whitespace *and* comments, which is what `scopeSelectorList` already did one level down; both share the pattern now. A selector starting with `@` is additionally passed through unscoped, so a future misclassification degrades to an unscoped rule rather than invalid CSS.
+
 ## 2.10.0 — 2026-07-30
 
 ### Added

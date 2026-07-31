@@ -103,6 +103,29 @@ describe('shadowToLight', () => {
     expect(result).toContain('.arc-button .btn');
   });
 
+  it('does not scope an @media prelude that a comment sits above', () => {
+    // Regression: the comment made the prelude look like a selector list, so
+    // the at-rule was emitted as `.tag @media (…) {` — a selector prefixing an
+    // at-rule, which is invalid, so the whole block never applied.
+    const input = '/* Collapse below the nav breakpoint. */\n@media (max-width: 900px) { .menu-btn { display: flex; } }';
+    const result = shadowToLight(input, tag);
+    expect(result).toContain('@media (max-width: 900px)');
+    expect(result).not.toContain('.arc-button @media');
+    expect(result).toContain('/* Collapse below the nav breakpoint. */');
+    expect(result).toContain('.arc-button .menu-btn');
+  });
+
+  it('does not scope @keyframes steps when a comment sits above the at-rule', () => {
+    // Same misclassification: with the at-rule scoped as a selector, its name
+    // never reached the context stack and `0%` was scoped like a real rule.
+    const input = '/* Spinner. */\n@keyframes spin { 0% { opacity: 0; } 100% { opacity: 1; } }';
+    const result = shadowToLight(input, tag);
+    expect(result).toContain('@keyframes spin');
+    expect(result).not.toContain('.arc-button @keyframes');
+    expect(result).not.toContain('.arc-button 0%');
+    expect(result).not.toContain('.arc-button 100%');
+  });
+
   it('treats a same-prefixed class as a distinct, still-scopable selector', () => {
     // `.arc-button-icon` shares the tag as a string prefix but is a different
     // class token, so it must still be scoped.

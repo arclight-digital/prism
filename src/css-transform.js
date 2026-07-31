@@ -123,6 +123,14 @@ export function shadowToLight(css, tag) {
   return result;
 }
 
+/** Leading run of whitespace and `/* … *\/` comments, in any order. */
+const LEAD_RE = /^(?:\s|\/\*[\s\S]*?\*\/)*/;
+
+/** Drop leading whitespace/comments, leaving the first meaningful character. */
+function stripLead(str) {
+  return str.slice(str.match(LEAD_RE)[0].length);
+}
+
 /** Escape a string for safe use inside a RegExp. */
 function escapeRegExp(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -229,7 +237,12 @@ function scopeSelectors(css, tag) {
     }
     if (ch === '{') {
       const prelude = buf;
-      const trimmed = prelude.trim();
+      // Look past leading whitespace *and* comments before classifying: a
+      // comment sitting above an at-rule is part of this prelude, and testing
+      // the raw trim would see `/*` instead of `@` and scope the at-rule's
+      // prelude as if it were a selector — `.tag @media (…) { … }`, which the
+      // browser drops whole.
+      const trimmed = stripLead(prelude).trim();
       if (trimmed.startsWith('@')) {
         const name = trimmed.slice(1).split(/[\s(]/)[0].toLowerCase();
         context.push(name);
@@ -262,11 +275,13 @@ function scopeSelectorList(prelude, tag, scopedRe) {
       // itself already `.tag`-anchored (every :host([attr]) variant), the result
       // is `.tag .tag[data-…]`, which requires a nested component and matches
       // nothing (dead CSS).
-      const lead = part.match(/^(?:\s|\/\*[\s\S]*?\*\/)*/)[0];
+      const lead = part.match(LEAD_RE)[0];
       let sel = part.slice(lead.length);
       const trail = sel.match(/\s*$/)[0];
       sel = sel.slice(0, sel.length - trail.length);
-      if (!sel || scopedRe.test(sel)) return part;
+      // `@…` is never a selector — an at-rule reaching here means the caller
+      // misclassified the prelude; pass it through rather than emit invalid CSS.
+      if (!sel || sel.startsWith('@') || scopedRe.test(sel)) return part;
       return `${lead}.${tag} ${sel}${trail}`;
     })
     .join(',');
