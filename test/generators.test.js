@@ -862,6 +862,34 @@ describe('reserved words in binding position', () => {
     expect(content).toContain(':for="props.for"');
   });
 
+  // `this.format = undefined` / `this.contained = null` reached wrappers as the
+  // quoted strings 'undefined' / 'null': truthy where the author meant empty,
+  // and in Vue a string default against a Function-typed prop, which failed
+  // `vue-tsc` and so failed the package's own build. Both must emit no default
+  // at all — the element applies its own on upgrade.
+  it.each([
+    ['undefined', 'a Function prop left unset'],
+    ['null', 'an opt-out prop left null'],
+  ])('emits no wrapper default for the source literal %s (%s)', (literal) => {
+    const meta = {
+      ...labelMeta,
+      props: [
+        { name: 'format', docType: 'Function', default: literal, reflect: false, values: [] },
+      ],
+      eventDetails: {},
+      events: [],
+    };
+
+    const vue = readFileSync(generateVue(meta, config(`out/vue-${literal}`), tmpDir).path, 'utf-8');
+    expect(vue).not.toContain(`'${literal}'`);
+    // No emittable default left, so the whole withDefaults wrapper drops away.
+    expect(vue).toContain('const props = defineProps<{');
+
+    const svelte = readFileSync(
+      generateSvelte(meta, config(`out/svelte-${literal}`), tmpDir).path, 'utf-8');
+    expect(svelte).not.toContain(`format = '${literal}'`);
+  });
+
   it('does not collide when the component also declares the renamed prop', () => {
     const both = {
       ...labelMeta,

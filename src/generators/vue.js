@@ -51,7 +51,12 @@ export function generateVue(meta, config, root) {
 
   // Props
   const hasProps = meta.props.length > 0;
-  const hasDefaults = meta.props.some((p) => p.default);
+  // Whether anything is actually emittable, not whether a source default was
+  // recorded: a prop whose only default is unrepresentable (`undefined`, a
+  // string against a Number type) contributes nothing, and asking the raw
+  // source would wrap the props in a `withDefaults(…, {})` with an empty
+  // object — legal, and a lie about the component.
+  const hasDefaults = meta.props.some((p) => vueDefault(p) !== undefined);
 
   if (hasProps) {
     const propsBlock = meta.props

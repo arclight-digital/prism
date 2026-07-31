@@ -1,5 +1,36 @@
 # Changelog
 
+## 2.11.1 — 2026-07-31
+
+### Fixed
+
+**A prop defaulting to `undefined` or `null` reached wrappers as a quoted string.**
+`this.format = undefined` and `this.contained = null` are the absence of a
+value, but the parser records a default as source text, so both arrived at
+`typedDefault` as the truthy strings `'undefined'` and `'null'`. Every branch
+before the fallback is keyed on a declared type or a leading quote, so neither
+matched one and both fell through to "quote it" — emitting `format: 'undefined'`
+and `contained: 'null'`.
+
+Two ways that showed up:
+
+- **Vue failed to build.** `format` is documented `Function`, so a string
+  default is `TS2322: Type 'string' is not assignable to type
+  'InferDefault<…, Function | undefined>'`. `vue-tsc` runs in the package's
+  `prepack`, so `npm pack` on the Vue wrapper failed outright.
+- **Svelte compiled and was wrong.** `contained = 'null'` is a non-empty string
+  and therefore truthy, so a prop whose whole purpose was to be unset defaulted
+  to set. Silent, and only in the generated packages.
+
+Both now emit no default at all, which is what preserves the author's intent —
+the element assigns its own `null`/`undefined` when it upgrades, and a wrapper
+that stays quiet lets it.
+
+`hasDefaults` in the Vue generator followed: it asked whether a source default
+was *recorded* rather than whether any survived typing, so a component whose
+only default was unrepresentable got `withDefaults(defineProps<…>(), {})` — an
+empty defaults object, legal and untrue. It now asks the serialiser.
+
 ## 2.10.1 — 2026-07-30
 
 ### Fixed

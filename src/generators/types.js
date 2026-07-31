@@ -152,6 +152,15 @@ export function tsType(prop) {
 export function typedDefault(prop, { arrayFactory = false } = {}) {
   if (!prop.default) return undefined;
   const val = prop.default;
+  // `this.format = undefined` and `this.contained = null` are the *absence* of
+  // a value, but they arrive here as the truthy source strings 'undefined' and
+  // 'null'. Every earlier branch is keyed on a declared type or a quote, so
+  // both used to fall through to the quote-it fallback and reach wrappers as
+  // the string 'undefined' / 'null' — truthy, and in Vue a string default
+  // against a Function-typed prop, which fails the package's own build. The
+  // element sets its own null/undefined on upgrade, so emitting nothing here
+  // is what actually preserves the author's default.
+  if (val === 'undefined' || val === 'null') return undefined;
   const unquoted = val.replace(/^['"]|['"]$/g, '');
   if (prop.type === 'Number') {
     const n = Number(unquoted);
