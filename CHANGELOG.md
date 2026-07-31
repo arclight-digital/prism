@@ -31,6 +31,38 @@ was *recorded* rather than whether any survived typing, so a component whose
 only default was unrepresentable got `withDefaults(defineProps<…>(), {})` — an
 empty defaults object, legal and untrue. It now asks the serialiser.
 
+## 2.11.0 — 2026-07-31
+
+The release that shipped the four entries below it.
+
+`2.8.1`, `2.9.0`, `2.10.0` and `2.10.1` were written up as separate versions but
+never published — `package.json` stayed at `2.8.0` throughout and was bumped once,
+to `2.11.0`, at the release. On npm the line therefore reads `2.8.0 → 2.11.0`, and
+those four headings are the notes for what is inside this one version rather than
+versions anyone can install. They are kept as written; collapsing them would lose
+the per-change detail, and renumbering them would invent a history that npm does
+not have.
+
+So, upgrading from `2.8.0`, this release contains:
+
+- **`config.barrelExclude`** — keep a component out of every generated barrel, so
+  one component's optional dependency stops being every consumer's required
+  install. See [2.10.0](#2100--2026-07-30).
+- **`@slot none`** — a way to assert that a component takes no children, so its
+  wrappers omit `children` instead of silently discarding it. See
+  [2.9.0](#290--2026-07-30).
+- **A commented at-rule was emitted with the component selector in front of it**,
+  which browsers drop whole — a responsive breakpoint that had never once applied.
+  See [2.10.1](#2101--2026-07-30).
+- **Barrel exports are pruned for components that no longer exist**, plus the
+  Angular, Solid and Preact wrapper fixes listed in [2.8.1](#281--2026-07-30).
+
+### Fixed
+
+- **The release itself now carries a heading.** A version that ships without one
+  leaves its content filed under numbers that were never released, which is how
+  this entry came to be written after the fact.
+
 ## 2.10.1 — 2026-07-30
 
 ### Fixed
