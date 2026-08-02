@@ -38,6 +38,19 @@ describe('normalizeConfig', () => {
       /config\.tiers must be an array/
     );
   });
+
+  it('throws when propsFrom is not a function', () => {
+    // A misplaced entry that silently did nothing would drop every built prop
+    // from every wrapper — the failure the hook exists to fix.
+    expect(() => normalizeConfig({ components: 'src', propsFrom: {} })).toThrow(
+      /config\.propsFrom must be a function/
+    );
+  });
+
+  it('accepts a propsFrom function', () => {
+    const propsFrom = () => undefined;
+    expect(normalizeConfig({ components: 'src', propsFrom }).propsFrom).toBe(propsFrom);
+  });
 });
 
 describe('isIgnored', () => {

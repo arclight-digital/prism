@@ -135,7 +135,9 @@ function discoverComponents(config) {
 // ── Process a single component file ─────────────────────────
 function processFile(filePath, config) {
   const source = readFileSync(filePath, 'utf-8');
-  const meta = parseComponent(source, filePath, config.prefix, config.interactivity, diagnostics);
+  const meta = parseComponent(source, filePath, config.prefix, config.interactivity, diagnostics, {
+    propsFrom: config.propsFrom,
+  });
 
   if (!meta) {
     console.log(`  skip: ${relative(root, filePath)} (no component found)`);
@@ -551,6 +553,9 @@ function flushDiagnostics(config) {
   const LABELS = {
     'slot-name-not-identifier': 'slot names that are not valid identifiers',
     'slot-name-collides-with-prop': 'slots sharing a name with a prop — informational, no action',
+    'unparsed-prop-declaration': "declared props prism's reader could not type — missing from every wrapper",
+    'doc-prop-undeclared': 'documented @prop names with no reactive property behind them',
+    'invalid-props-from': 'config.propsFrom returning something prism could not use',
     'framework-reserved': 'prop names a framework reserves — silently dropped at runtime',
     'doc-drift': 'documented @prop unions contradicted by the CSS or the default',
     'unportable-doc-type': 'documented @prop types naming symbols prism cannot import',
@@ -714,7 +719,8 @@ async function main() {
       // go to a throwaway collector unless this is the full reconcile.
       const sink = sweep ? diagnostics : [];
       const metas = currentFiles
-        .map((f) => parseComponent(readFileSync(f, 'utf-8'), f, config.prefix, config.interactivity, sink))
+        .map((f) => parseComponent(readFileSync(f, 'utf-8'), f, config.prefix, config.interactivity, sink,
+          { propsFrom: config.propsFrom }))
         .filter(Boolean);
       if (metas.length === 0) return;
       if (config.css) {

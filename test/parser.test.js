@@ -334,6 +334,214 @@ describe('parseComponent', () => {
       expect(names).toContain('count');
       expect(meta.props.find((p) => p.name === 'count').type).toBe('Number');
     });
+
+    it('keeps a prop whose nested option merely mentions state: true', () => {
+      // Regression: the config capture was `[^}]*`, so it ran past the inner
+      // brace and a nested `state: true` marked a public prop internal.
+      const source = `
+        /** @tag arc-thing */
+        export class ArcThing extends LitElement {
+          static properties = {
+            label: { type: String },
+            config: { type: Object, converter: { fromAttribute: () => ({ state: true }) } },
+            trailing: { type: String },
+          };
+        }
+      `;
+      const meta = parseComponent(source, '/src/content/thing.js', prefix);
+      expect(meta.props.map((p) => p.name)).toEqual(['label', 'config', 'trailing']);
+      expect(meta.props.find((p) => p.name === 'config').type).toBe('Object');
+    });
+
+    it('still excludes a top-level { state: true } declaration', () => {
+      const source = `
+        /** @tag arc-thing */
+        export class ArcThing extends LitElement {
+          static properties = {
+            label: { type: String },
+            _open: { type: Boolean, state: true },
+          };
+        }
+      `;
+      const meta = parseComponent(source, '/src/content/thing.js', prefix);
+      expect(meta.props.map((p) => p.name)).toEqual(['label']);
+    });
+  });
+
+  describe('declarations the reader cannot type', () => {
+    // The failure this reports: a repo moves to helper-built declarations,
+    // every prop vanishes from all six wrappers, fewer props still typechecks,
+    // and the run exits 0. Silence was the bug.
+    const helperSource = `
+      /**
+       * @tag arc-carousel
+       * @prop {boolean} autoPlay - autoplay
+       * @prop {number} interval - ms between slides
+       */
+      export class ArcCarousel extends LitElement {
+        static properties = {
+          autoPlay: flag(false, { attribute: 'auto-play' }),
+          interval: int({ default: 5000, min: 0 }),
+          label: { type: String },
+        };
+      }
+    `;
+
+    it('reports each declaration it cannot read, rather than dropping it silently', () => {
+      const diagnostics = [];
+      const meta = parseComponent(helperSource, '/src/content/carousel.js', prefix, {}, diagnostics);
+
+      expect(meta.props.map((p) => p.name)).toEqual(['label']);
+      const unreadable = diagnostics.filter((d) => d.code === 'unparsed-prop-declaration');
+      expect(unreadable.map((d) => d.prop)).toEqual(['autoPlay', 'interval']);
+      expect(unreadable[0].message).toContain('config.propsFrom');
+    });
+
+    it('does not also report those props as undocumented-but-declared', () => {
+      // Both findings are true, but naming the same prop under two headings
+      // reads as two problems.
+      const diagnostics = [];
+      parseComponent(helperSource, '/src/content/carousel.js', prefix, {}, diagnostics);
+      expect(diagnostics.filter((d) => d.code === 'doc-prop-undeclared')).toHaveLength(0);
+    });
+
+    it('reports a documented @prop with no declaration behind it', () => {
+      const source = `
+        /**
+         * @tag arc-badge
+         * @prop {string} tone - visual tone
+         */
+        export class ArcBadge extends LitElement {
+          static properties = { label: { type: String } };
+        }
+      `;
+      const diagnostics = [];
+      parseComponent(source, '/src/content/badge.js', prefix, {}, diagnostics);
+      const drift = diagnostics.filter((d) => d.code === 'doc-prop-undeclared');
+      expect(drift).toHaveLength(1);
+      expect(drift[0].prop).toBe('tone');
+    });
+  });
+
+  describe('config.propsFrom', () => {
+    const source = `
+      /** @tag arc-carousel */
+      export class ArcCarousel extends LitElement {
+        static properties = {
+          selected: int({ default: 0, min: 0 }),
+        };
+      }
+    `;
+
+    it('lets a hook resolve declarations prism cannot read', () => {
+      const diagnostics = [];
+      const meta = parseComponent(source, '/src/content/carousel.js', prefix, {}, diagnostics, {
+        propsFrom: () => [{ name: 'selected', type: 'Number', default: '0', reflect: true }],
+      });
+
+      expect(meta.props).toEqual([{
+        name: 'selected', type: 'Number', default: '0', reflect: true, values: [], docType: '',
+      }]);
+      // The hook answered, so the built-in reader never ran and has nothing to report.
+      expect(diagnostics).toHaveLength(0);
+    });
+
+    it('falls through to the built-in reader when the hook returns undefined', () => {
+      const meta = parseComponent(
+        '/** @tag arc-tag */ export class ArcTag extends LitElement { static properties = { label: { type: String } }; }',
+        '/src/content/tag.js', prefix, {}, [], { propsFrom: () => undefined }
+      );
+      expect(meta.props.map((p) => p.name)).toEqual(['label']);
+    });
+
+    it('fills in the fields a hook leaves out', () => {
+      const meta = parseComponent(source, '/src/content/carousel.js', prefix, {}, [], {
+        propsFrom: () => [{ name: 'selected', type: 'Number' }],
+      });
+      expect(meta.props[0]).toEqual({
+        name: 'selected', type: 'Number', default: '', reflect: false, values: [], docType: '',
+      });
+    });
+
+    it('converts a non-string default to source text', () => {
+      // `default` is emitted verbatim into generated code, so a hook returning
+      // the value rather than its source is corrected rather than dropped.
+      const meta = parseComponent(source, '/src/content/carousel.js', prefix, {}, [], {
+        propsFrom: () => [{ name: 'selected', type: 'Number', default: 0 }],
+      });
+      expect(meta.props[0].default).toBe('0');
+    });
+
+    it('honours a hook marking a declaration as internal state', () => {
+      const meta = parseComponent(source, '/src/content/carousel.js', prefix, {}, [], {
+        propsFrom: () => [
+          { name: 'selected', type: 'Number' },
+          { name: '_active', type: 'Boolean', state: true },
+        ],
+      });
+      expect(meta.props.map((p) => p.name)).toEqual(['selected']);
+    });
+
+    it('reports an unknown type instead of silently calling it String', () => {
+      const diagnostics = [];
+      const meta = parseComponent(source, '/src/content/carousel.js', prefix, {}, diagnostics, {
+        propsFrom: () => [{ name: 'selected', type: 'int' }],
+      });
+      expect(meta.props[0].type).toBe('String');
+      expect(diagnostics.map((d) => d.code)).toEqual(['invalid-props-from']);
+    });
+
+    it('drops an entry with no usable name and reports it', () => {
+      const diagnostics = [];
+      const meta = parseComponent(source, '/src/content/carousel.js', prefix, {}, diagnostics, {
+        propsFrom: () => [{ type: 'Number' }, { name: 'ok', type: 'Number' }],
+      });
+      expect(meta.props.map((p) => p.name)).toEqual(['ok']);
+      expect(diagnostics.map((d) => d.code)).toEqual(['invalid-props-from']);
+    });
+
+    it('falls back to the built-in reader when the hook returns a non-array', () => {
+      const diagnostics = [];
+      const meta = parseComponent(
+        '/** @tag arc-tag */ export class ArcTag extends LitElement { static properties = { label: { type: String } }; }',
+        '/src/content/tag.js', prefix, {}, diagnostics, { propsFrom: () => 'nope' }
+      );
+      expect(meta.props.map((p) => p.name)).toEqual(['label']);
+      expect(diagnostics.map((d) => d.code)).toEqual(['invalid-props-from']);
+    });
+
+    it('survives a throwing hook rather than taking the run down', () => {
+      const diagnostics = [];
+      const meta = parseComponent(
+        '/** @tag arc-tag */ export class ArcTag extends LitElement { static properties = { label: { type: String } }; }',
+        '/src/content/tag.js', prefix, {}, diagnostics,
+        { propsFrom: () => { throw new Error('boom'); } }
+      );
+      expect(meta.props.map((p) => p.name)).toEqual(['label']);
+      expect(diagnostics[0].code).toBe('invalid-props-from');
+      expect(diagnostics[0].message).toContain('boom');
+    });
+
+    it('applies constructor defaults and documented unions over hook-resolved props', () => {
+      const withCtor = `
+        /**
+         * @tag arc-carousel
+         * @prop {'slide' | 'fade'} effect - transition style
+         */
+        export class ArcCarousel extends LitElement {
+          static properties = { effect: oneOf(['slide', 'fade']) };
+          constructor() {
+            super();
+            this.effect = 'slide';
+          }
+        }
+      `;
+      const meta = parseComponent(withCtor, '/src/content/carousel.js', prefix, {}, [], {
+        propsFrom: () => [{ name: 'effect', type: 'String' }],
+      });
+      expect(meta.props[0].default).toBe("'slide'");
+      expect(meta.props[0].values).toEqual(['slide', 'fade']);
+    });
   });
 
   describe('input validation (injection hardening)', () => {

@@ -87,6 +87,12 @@ export function formatBytes(n) {
  * @param {import('./parser.js').Diagnostic[]} diagnostics
  */
 export const STRICT_CODES = [
+  // First because they are the most consequential thing prism can find: a prop
+  // it cannot read is a prop absent from every wrapper, and fewer props still
+  // typechecks, so nothing downstream notices.
+  'unparsed-prop-declaration',
+  'doc-prop-undeclared',
+  'invalid-props-from',
   'wrapper-missing-slot',
   'slot-name-not-identifier',
   'framework-reserved',
@@ -98,8 +104,14 @@ export const STRICT_CODES = [
   'invalid-detail-key',
 ];
 
-/** Codes an `acknowledge` entry may name. Its own staleness isn't waivable. */
-export const ACKNOWLEDGEABLE_CODES = STRICT_CODES.filter((c) => c !== 'unmatched-acknowledge');
+/**
+ * Codes an `acknowledge` entry may name. Its own staleness isn't waivable, and
+ * neither is `invalid-props-from` — that one reports a config hook returning
+ * something prism can't use, which is a bug in the config doing the
+ * acknowledging rather than a finding about a component.
+ */
+const UNWAIVABLE = new Set(['unmatched-acknowledge', 'invalid-props-from']);
+export const ACKNOWLEDGEABLE_CODES = STRICT_CODES.filter((c) => !UNWAIVABLE.has(c));
 
 /**
  * True if an `acknowledge` entry covers a diagnostic.

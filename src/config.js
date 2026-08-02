@@ -160,6 +160,18 @@ export function normalizeConfig(config) {
   config.acknowledge = config.acknowledge
     .filter((e) => ACKNOWLEDGEABLE_CODES.includes(e.code));
 
+  // Property resolver hook. Prism's own reader only understands object
+  // literals and decorators, and a repo whose declarations are built by
+  // helpers (`selected: int({ min: 0 })`) would otherwise need prism to learn
+  // its vocabulary. Validated as a function here rather than at call time: a
+  // misspelt or misplaced entry that silently did nothing would drop every
+  // built prop from every wrapper, which is the failure this exists to fix.
+  if (config.propsFrom !== undefined && typeof config.propsFrom !== 'function') {
+    throw new Error(
+      'prism: config.propsFrom must be a function (source, filePath) returning an array of props, or undefined to fall through to prism\'s own reader'
+    );
+  }
+
   config.prefix = config.prefix || 'arc';
   config.ignore = config.ignore || [];
   config.tiers = config.tiers || [];

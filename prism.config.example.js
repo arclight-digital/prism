@@ -23,6 +23,23 @@ export default {
     'arc-copy-button': { exclude: ['value'] },
   },
 
+  // Resolve property declarations prism's own reader can't. It understands
+  // object literals and `@property()` decorators; a declaration built by a
+  // helper — `selected: int({ min: 0, clamp: 'toRange' })` — means something
+  // only your repo knows. Return an array of props, or undefined to fall
+  // through, so this only has to handle the files it knows about. Omit it
+  // entirely if your components declare props as plain literals.
+  //
+  // propsFrom(source, filePath) {
+  //   return readDeclarations(source)?.map((d) => ({
+  //     name: d.name,           // required
+  //     type: d.type,           // String | Boolean | Number | Array | Object
+  //     default: d.defaultSrc,  // source text — "'md'", not "md"
+  //     reflect: d.reflect,
+  //     state: d.internal,      // true keeps it off the public surface
+  //   }));
+  // },
+
   // Findings you've already decided about, so `--strict` can pass. Some
   // findings are correct and stay correct — the fix was made, and the finding
   // is still true. Waived findings are still printed under `prism: accepted:`,

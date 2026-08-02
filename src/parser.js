@@ -83,9 +83,10 @@ function makeWarn(diagnostics, filePath) {
  * @param {string} [prefix='arc'] - component tag prefix (e.g. 'arc' for arc-button)
  * @param {Record<string, string>} [overrides={}] - config.interactivity, tag → level
  * @param {Diagnostic[]} [diagnostics] - collector; suppresses console output
+ * @param {{ propsFrom?: (source: string, filePath: string) => PropMeta[]|undefined }} [opts]
  * @returns {ComponentMeta|null}
  */
-export function parseComponent(source, filePath, prefix = 'arc', overrides = {}, diagnostics = null) {
+export function parseComponent(source, filePath, prefix = 'arc', overrides = {}, diagnostics = null, opts = {}) {
   const warn = makeWarn(diagnostics, filePath);
   // Extract tag name from @tag JSDoc, falling back to customElements.define
   const tagDocMatch = source.match(/@tag\s+([a-z][\w-]*)/);
@@ -115,8 +116,11 @@ export function parseComponent(source, filePath, prefix = 'arc', overrides = {},
   const tierMatch = normalizedPath.match(/\/(?:src\/)?(\w+)\/[^/]+$/);
   const tier = tierMatch ? tierMatch[1] : 'unknown';
 
-  // Parse static properties block
-  const props = parseProperties(source);
+  // Resolve declared properties (config.propsFrom first, then the built-in
+  // reader). Names the reader saw but couldn't type are collected so the
+  // JSDoc cross-check below doesn't report the same prop a second time.
+  const unparsed = new Set();
+  const props = resolveProps(source, filePath, opts.propsFrom, warn, tag, unparsed);
 
   // Parse constructor defaults
   applyDefaults(props, source);
@@ -126,7 +130,7 @@ export function parseComponent(source, filePath, prefix = 'arc', overrides = {},
 
   // Read documented unions first — they are authored intent, and the CSS pass
   // below is only a fallback for props with no `@prop` union to go on.
-  applyDocTypes(props, source, warn, tag);
+  applyDocTypes(props, source, warn, tag, unparsed);
   detectEnumValues(props, css, tag, warn);
 
   // Parse template from render(). Defaults are needed to pick the branch of a
@@ -169,13 +173,117 @@ function extractBalanced(source, startIdx) {
   return source.slice(startIdx, i - 1);
 }
 
+/** Property names prism can emit into a wrapper. */
+const VALID_PROP_NAME = /^[A-Za-z_$][\w$]*$/;
+
+/** The `type` values Lit's property map uses, and prism knows how to render. */
+const KNOWN_PROP_TYPES = new Set(['String', 'Boolean', 'Number', 'Array', 'Object']);
+
+/**
+ * Resolve a component's property declarations.
+ *
+ * `config.propsFrom` gets first refusal. Prism's own reader understands object
+ * literals and decorators; a repo whose declarations are *built* — `selected:
+ * int({ min: 0, clamp: 'toRange' })` — carries its meaning in a vocabulary
+ * prism would have to re-implement to read, and re-implementing it is how the
+ * generator's idea of a prop drifts from the component's. The hook lets the
+ * repo answer for itself. Returning undefined falls through to the built-in
+ * reader, so a hook only has to handle the files it actually knows about.
+ */
+function resolveProps(source, filePath, propsFrom, warn, tag, unparsed) {
+  if (typeof propsFrom === 'function') {
+    let returned;
+    try {
+      returned = propsFrom(source, filePath);
+    } catch (err) {
+      // A throwing hook must not take the run down with it: the built-in
+      // reader is still a usable answer, and the fallback is reported.
+      warn(
+        'invalid-props-from',
+        `config.propsFrom threw on ${filePath}: ${err.message} — falling back to prism's own reader.`,
+        { tag }
+      );
+      returned = undefined;
+    }
+    if (returned !== undefined && returned !== null) {
+      const resolved = normalizeHookProps(returned, filePath, warn, tag);
+      if (resolved) return resolved;
+    }
+  }
+  return parseProperties(source, warn, tag, unparsed);
+}
+
+/**
+ * Validate and fill in what `propsFrom` handed back.
+ *
+ * Everything downstream — six generators and the type emitters — assumes a
+ * fully-populated PropMeta, so a hook is held to the shape without being made
+ * to write all of it. Returns null when the value isn't usable at all, which
+ * puts the built-in reader back in play.
+ */
+function normalizeHookProps(returned, filePath, warn, tag) {
+  if (!Array.isArray(returned)) {
+    warn(
+      'invalid-props-from',
+      `config.propsFrom returned ${returned === null ? 'null' : typeof returned} for ${filePath} — expected an array of props, or undefined to fall through to prism's reader. Ignoring it.`,
+      { tag }
+    );
+    return null;
+  }
+
+  const out = [];
+  const seen = new Set();
+  for (const [i, entry] of returned.entries()) {
+    if (typeof entry !== 'object' || entry === null || !VALID_PROP_NAME.test(entry.name ?? '')) {
+      warn(
+        'invalid-props-from',
+        `config.propsFrom returned an entry at index ${i} for ${filePath} with no usable "name" — dropped.`,
+        { tag }
+      );
+      continue;
+    }
+    // A hook is the only thing that knows a built declaration is internal
+    // state, so it gets the same opt-out `{ state: true }` gives a literal.
+    if (entry.state === true) continue;
+    if (seen.has(entry.name)) continue;
+    seen.add(entry.name);
+
+    // An unrecognised type silently becoming String is the failure this whole
+    // change exists to stop, so it is named rather than absorbed.
+    let type = entry.type ?? 'String';
+    if (!KNOWN_PROP_TYPES.has(type)) {
+      warn(
+        'invalid-props-from',
+        `config.propsFrom typed "${entry.name}" as ${JSON.stringify(type)} in ${filePath}, which is not one of ${[...KNOWN_PROP_TYPES].join(', ')} — treating it as String.`,
+        { tag, prop: entry.name }
+      );
+      type = 'String';
+    }
+
+    out.push({
+      name: entry.name,
+      type,
+      // `default` is *source text*, not a value — it is emitted verbatim into
+      // generated code. A plain primitive is the easy mistake, so it's
+      // converted rather than rejected.
+      default: typeof entry.default === 'string' ? entry.default
+        : entry.default === undefined ? ''
+          : JSON.stringify(entry.default),
+      reflect: entry.reflect === true,
+      values: Array.isArray(entry.values) ? entry.values.filter((v) => typeof v === 'string') : [],
+      docType: typeof entry.docType === 'string' ? entry.docType : '',
+    });
+  }
+  return out;
+}
+
 /**
  * Parse Lit property declarations. Supports all three common styles:
  *   - `static properties = { ... }` (class field)
  *   - `static get properties() { return { ... }; }` (legacy getter)
  *   - `@property({ type: String }) name;` (decorators)
  */
-function parseProperties(source) {
+function parseProperties(source, warn, tag, unparsed) {
   const props = [];
 
   // Class-field or legacy-getter object literal.
@@ -184,7 +292,7 @@ function parseProperties(source) {
   const objStart = fieldMatch ?? getterMatch;
   if (objStart) {
     const block = extractBalanced(source, objStart.index + objStart[0].length);
-    parsePropertyBlock(block, props);
+    parsePropertyBlock(block, props, warn, tag, unparsed);
   }
 
   // Decorator style (coexists with the above; skips names already found).
@@ -193,23 +301,137 @@ function parseProperties(source) {
   return props;
 }
 
+/**
+ * Index of the delimiter closing the group that opened just before `start`.
+ * Quoted text is stepped over so a brace inside a string can't unbalance it.
+ */
+function endOfGroup(source, start) {
+  let depth = 1;
+  let i = start;
+  while (i < source.length) {
+    const c = source[i];
+    if (c === '"' || c === "'" || c === '`') { i = skipString(source, i); continue; }
+    if (c === '{' || c === '[' || c === '(') depth++;
+    else if (c === '}' || c === ']' || c === ')') {
+      depth--;
+      if (depth === 0) return i;
+    }
+    i++;
+  }
+  return source.length;
+}
+
+/** Index of the top-level `,` ending the value that starts at `start`. */
+function endOfValue(source, start) {
+  let depth = 0;
+  let i = start;
+  while (i < source.length) {
+    const c = source[i];
+    if (c === '"' || c === "'" || c === '`') { i = skipString(source, i); continue; }
+    if (c === '{' || c === '[' || c === '(') depth++;
+    else if (c === '}' || c === ']' || c === ')') depth--;
+    else if (c === ',' && depth === 0) return i;
+    i++;
+  }
+  return source.length;
+}
+
+/**
+ * Yield each top-level `name: value` pair of an object body, with the value's
+ * source text.
+ *
+ * Brace-balanced rather than regex-matched. The pattern this replaces,
+ * `(\w+)\s*:\s*\{([^}]*)\}`, ended its capture at the *first* `}` — so a
+ * nested option (`converter: { fromAttribute }`) both truncated the config it
+ * read and left the tail to be rescanned as though it were more properties.
+ */
+function* scanEntries(block) {
+  // Leading separators, line and block comments are consumed with the key so
+  // a commented-out property doesn't derail the walk.
+  const KEY = /(?:\s|,|\/\/[^\n]*|\/\*[\s\S]*?\*\/)*([A-Za-z_$][\w$]*|'[^']*'|"[^"]*"|\[[^\]]*\])\s*:\s*/y;
+  let i = 0;
+  while (i < block.length) {
+    KEY.lastIndex = i;
+    const m = KEY.exec(block);
+    if (!m) {
+      // Shorthand (`{ label }`) or a spread — skip to the next entry rather
+      // than abandoning the rest of the block.
+      const next = endOfValue(block, i);
+      if (next >= block.length) return;
+      i = next + 1;
+      continue;
+    }
+    const valueStart = KEY.lastIndex;
+    const end = endOfValue(block, valueStart);
+    // A computed key names nothing prism can emit an attribute for.
+    if (!m[1].startsWith('[')) {
+      yield { name: m[1].replace(/^['"]|['"]$/g, ''), value: block.slice(valueStart, end).trim() };
+    }
+    i = end + 1;
+  }
+}
+
+/**
+ * Blank out everything nested inside the config, leaving only its own keys.
+ *
+ * `state`, `type` and `reflect` are read by regex, and a regex over the whole
+ * config answers for the wrong object: `{ type: Object, converter: { ... } }`
+ * would let a nested `state: true` mark a public prop internal.
+ */
+function stripNested(config) {
+  let out = '';
+  let depth = 0;
+  let i = 0;
+  while (i < config.length) {
+    const c = config[i];
+    if (c === '"' || c === "'" || c === '`') {
+      const end = skipString(config, i);
+      if (depth === 0) out += config.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (c === '{' || c === '[' || c === '(') { depth++; i++; continue; }
+    if (c === '}' || c === ']' || c === ')') { depth--; i++; continue; }
+    if (depth === 0) out += c;
+    i++;
+  }
+  return out;
+}
+
+/** One-line form of a declaration, for a diagnostic message. */
+function summarize(value) {
+  const flat = value.replace(/\s+/g, ' ').trim();
+  return flat.length > 48 ? `${flat.slice(0, 47)}…` : flat;
+}
+
 /** Parse the `{ name: { type, reflect } }` object body into prop entries. */
-function parsePropertyBlock(block, props) {
+function parsePropertyBlock(block, props, warn, tag, unparsed) {
   const seen = new Set(props.map((p) => p.name));
-  // Match each property: name: { type: Type, reflect: true } (or shorthand).
-  const propPattern = /(\w+)\s*:\s*\{([^}]*)\}/g;
-  let match;
-  while ((match = propPattern.exec(block)) !== null) {
-    const name = match[1];
-    const config = match[2];
+  for (const { name, value } of scanEntries(block)) {
     if (seen.has(name)) continue;
+    seen.add(name);
+
+    // Anything that isn't an inline object literal — a helper call, a shared
+    // constant, a spread-built config — keeps its meaning somewhere prism
+    // cannot follow. Skipping it *silently* is what let a component lose every
+    // prop from all six wrappers and still exit 0, so it is reported.
+    if (!value.startsWith('{') || !value.endsWith('}')) {
+      warn(
+        'unparsed-prop-declaration',
+        `${tag ?? 'component'} declares "${name}" as \`${summarize(value)}\`, which prism's reader cannot type — the prop reaches no generated wrapper. Declare it as an object literal, or resolve it with config.propsFrom.`,
+        { tag, prop: name }
+      );
+      unparsed?.add(name);
+      continue;
+    }
+
+    const config = stripNested(value.slice(1, -1));
 
     // Internal reactive state ({ state: true }) is not public API — never
     // expose it in generated wrapper props/types.
-    if (/state\s*:\s*true/.test(config)) continue;
+    if (/\bstate\s*:\s*true/.test(config)) continue;
 
     props.push(makeProp(name, config));
-    seen.add(name);
   }
 }
 
@@ -218,13 +440,23 @@ function parseDecoratorProps(source, props) {
   const seen = new Set(props.map((p) => p.name));
   // @property({ ... }) [accessor] name  — `@state()` decorators are internal
   // and intentionally not matched here.
-  const decoratorPattern = /@property\(\s*(\{[^}]*\})?\s*\)\s*(?:accessor\s+)?(\w+)/g;
+  const decoratorPattern = /@property\s*\(/g;
   let match;
   while ((match = decoratorPattern.exec(source)) !== null) {
-    const config = match[1] ?? '';
-    const name = match[2];
+    const argsStart = match.index + match[0].length;
+    const argsEnd = endOfGroup(source, argsStart);
+    decoratorPattern.lastIndex = argsEnd + 1;
+
+    const args = source.slice(argsStart, argsEnd).trim();
+    const after = /^\s*(?:accessor\s+)?(\w+)/.exec(source.slice(argsEnd + 1, argsEnd + 160));
+    if (!after) continue;
+    const name = after[1];
     if (seen.has(name)) continue;
-    if (/state\s*:\s*true/.test(config)) continue;
+
+    const config = args.startsWith('{') && args.endsWith('}')
+      ? stripNested(args.slice(1, -1))
+      : '';
+    if (/\bstate\s*:\s*true/.test(config)) continue;
 
     props.push(makeProp(name, config));
     seen.add(name);
@@ -233,8 +465,8 @@ function parseDecoratorProps(source, props) {
 
 /** Build a prop entry from a name and its `{ type, reflect }` config text. */
 function makeProp(name, config) {
-  const typeMatch = config.match(/type\s*:\s*(\w+)/);
-  const reflectMatch = config.match(/reflect\s*:\s*(true|false)/);
+  const typeMatch = config.match(/\btype\s*:\s*(\w+)/);
+  const reflectMatch = config.match(/\breflect\s*:\s*(true|false)/);
   return {
     name,
     type: typeMatch ? typeMatch[1] : 'String',
@@ -318,7 +550,7 @@ const PORTABLE_TYPE_NAMES = new Set([
  * @param {(code: string, message: string, extra?: object) => void} warn
  * @param {string} [tag]
  */
-function applyDocTypes(props, source, warn, tag) {
+function applyDocTypes(props, source, warn, tag, unparsed = new Set()) {
   const byName = new Map(props.map((p) => [p.name, p]));
   // Braces are matched rather than regex-captured: a nested object type such as
   // `{Array<{label: string}>}` ends at its *matching* brace, and `[^}]+` would
@@ -334,7 +566,21 @@ function applyDocTypes(props, source, warn, tag) {
     const nameMatch = /^\s+(\w+)/.exec(source.slice(afterBrace, afterBrace + 80));
     if (!nameMatch) continue;
     const prop = byName.get(nameMatch[1]);
-    if (!prop) continue;
+    // A documented prop with no declaration behind it is the one disagreement
+    // prism can detect with what it already parses — and the shape a silent
+    // prop loss takes: the JSDoc still describes the component, while the
+    // wrappers no longer have the prop. Reported per name, so five `@prop`
+    // tags over a properties block prism couldn't read say so five times.
+    if (!prop) {
+      // Already reported, in more detail, as an unreadable declaration.
+      if (unparsed.has(nameMatch[1])) continue;
+      warn(
+        'doc-prop-undeclared',
+        `${tag ?? 'component'} documents \`@prop ${nameMatch[1]}\` but declares no reactive property by that name — nothing called "${nameMatch[1]}" reaches the generated wrappers.`,
+        { tag, prop: nameMatch[1] }
+      );
+      continue;
+    }
 
     const typeText = raw.trim();
 

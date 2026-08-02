@@ -108,7 +108,7 @@ Prism reports what it couldn't act on, but a caller that pipes stdout and only s
 prism: --strict — 1 issue(s) reported above.
 ```
 
-It fails on: a generated wrapper missing an outlet the component declares, a prop name the target framework reserves, doc drift (a documented union the CSS or the component's own default contradicts), a `config.interactivity` or `config.acknowledge` entry matching nothing, and any tag, event or detail key prism had to drop.
+It fails on: a declared prop prism could not read, a documented `@prop` with no property behind it, a generated wrapper missing an outlet the component declares, a prop name the target framework reserves, doc drift (a documented union the CSS or the component's own default contradicts), a `config.interactivity` or `config.acknowledge` entry matching nothing, and any tag, event or detail key prism had to drop.
 
 Codes it reports but does *not* fail on: `slot-name-collides-with-prop`, `children-without-default-slot`, `unknown-acknowledge-code`. Each is information rather than a defect, and an unrecognised acknowledge code in particular must never block a rollback.
 
@@ -141,6 +141,50 @@ Two deliberate properties:
 
 - **Waived findings still print**, under a `prism: accepted:` heading with your note. An allowlist that makes output disappear is how a real regression ends up sheltering behind an old decision.
 - **An entry matching nothing is itself a strict failure.** Otherwise the list rots — entries outlive the findings they describe and quietly pre-waive whatever next appears under the same key. That one code, `unmatched-acknowledge`, cannot itself be acknowledged.
+
+### `config.propsFrom` — declarations prism can't read
+
+Prism reads two shapes of property declaration: an object literal in `static properties`, and an `@property()` decorator. A declaration that is *built* is a third shape it cannot follow:
+
+```js
+static properties = {
+  selected:    int({ default: 0, min: 0, max: '_maxIndex', clamp: 'toRange' }),
+  orientation: oneOf(['horizontal', 'vertical']),
+  showDots:    flag(true, { attribute: 'show-dots', negative: 'no-dots' }),
+};
+```
+
+Prism could learn to match `helper(...)` and map helper names to types, but that puts your vocabulary's semantics inside prism, where it will drift from the version in your repo. So the hook asks you instead:
+
+```js
+// prism.config.js
+export default {
+  propsFrom(source, filePath) {
+    // Return an array of props, or undefined to fall through to prism's
+    // own reader — so a hook only has to handle the files it knows about.
+    return myDeclarationReader(source)?.map((d) => ({
+      name: d.name,
+      type: d.type,          // String | Boolean | Number | Array | Object
+      default: d.defaultSrc, // source text, not a value: "'md'", not "md"
+      reflect: d.reflect,
+      state: d.internal,     // true keeps it off the public surface
+    }));
+  },
+};
+```
+
+Only `name` is required; the rest is filled in. `default` is emitted verbatim into generated code, so it is source text — a plain value is converted rather than dropped. Constructor defaults, documented `@prop` unions and documented types still apply on top of whatever the hook returns, so a hook only answers the part it knows about.
+
+The hook is held to its contract rather than trusted: an unknown `type`, an entry with no usable `name`, a non-array return, or a hook that throws is reported as `invalid-props-from` and prism falls back to its own reader. That code is a strict failure and cannot be acknowledged — it describes a bug in the config doing the acknowledging, not a finding about a component.
+
+**Without a hook, an unreadable declaration is still reported.** It was once dropped in silence, which meant a component could lose every prop from all six wrappers and still exit 0 — fewer props is valid TypeScript, so nothing downstream noticed. Two findings now cover it, both strict failures:
+
+| Code | Means |
+|------|-------|
+| `unparsed-prop-declaration` | The reader saw `name:` but the value wasn't an object literal. Names the prop and the declaration. |
+| `doc-prop-undeclared` | A `@prop` JSDoc tag with no reactive property behind it — the same disagreement seen from the documentation side. |
+
+Both are acknowledgeable, for the component that documents an inherited prop deliberately.
 
 ### `--report-json` — findings as data
 
@@ -322,6 +366,7 @@ export default {
 | `interactivity` | `Record<string, 'static'\|'hybrid'\|'interactive'>` | `{}` | Per-tag classification overrides. Highest precedence — see [Interactivity detection](#interactivity-detection) |
 | `bindings` | `Record<string, { exclude: string[] }>` | `{}` | Per-tag opt-outs from derived two-way bindings — see [Two-way bindings](#two-way-bindings) |
 | `acknowledge` | `Array<{ code, tag?, prop?, note? }>` | `[]` | Findings you've decided about, so `--strict` can pass — see [`config.acknowledge`](#configacknowledge--findings-youve-already-decided-about) |
+| `propsFrom` | `(source, filePath) => Props[] \| undefined` | — | Resolve property declarations prism's own reader can't — see [`config.propsFrom`](#configpropsfrom--declarations-prism-cant-read) |
 
 ### Framework options
 
@@ -353,7 +398,7 @@ Each framework section (`react`, `vue`, `svelte`, `angular`, `solid`, `preact`) 
 Prism uses regex-based parsing (no AST library) to extract metadata from Lit source files:
 
 1. **Tag + class name** from `customElements.define('arc-button', ArcButton)`, or a `@tag arc-button` JSDoc annotation. The tag must be a valid custom-element name (lowercase, hyphenated) — components with an invalid tag are skipped.
-2. **Properties** from `static properties = { ... }`, `static get properties() { ... }`, or `@property()` decorators — extracts name, type, and reflect. Internal `{ state: true }` / `@state()` members are excluded from the public surface.
+2. **Properties** from `static properties = { ... }`, `static get properties() { ... }`, or `@property()` decorators — extracts name, type, and reflect. Internal `{ state: true }` / `@state()` members are excluded from the public surface. The block is walked brace-balanced, so a nested option (`converter: { … }`) can't truncate the config or be mistaken for another property. A declaration that isn't an object literal is reported as `unparsed-prop-declaration` rather than skipped — see [`config.propsFrom`](#configpropsfrom--declarations-prism-cant-read).
 3. **Defaults** from `constructor() { this.variant = 'primary'; }` — assignments after nested blocks (`if`/`for`/`try`) are handled.
 4. **CSS** from `` css`...` `` template literals
 5. **Enum values** from a `@prop {'a' | 'b'} name` JSDoc union, falling back to `:host([prop="value"])` patterns in the CSS *plus the prop's own default*. The documented union wins because CSS can only see what CSS styles: the default member usually has no attribute selector to be inferred from (it's the unqualified base style), and a variant driven from JS leaves no selector at all. On the fallback path the constructor default supplies the missing member — it is by construction a legal value. Where both sources exist, a styled value or a default the union omits is reported as doc drift.

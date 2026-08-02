@@ -1,5 +1,59 @@
 # Changelog
 
+## 2.12.0 — 2026-08-01
+
+Reported from `arc-ui`, where a move to helper-built property declarations
+dropped every prop from all six framework wrappers and the run still exited 0.
+
+### Added
+
+**`config.propsFrom` — resolve declarations prism's reader can't.** Prism reads
+object literals and `@property()` decorators. A declaration built by a helper —
+`selected: int({ default: 0, min: 0, clamp: 'toRange' })` — carries its meaning
+in a vocabulary prism would have to re-implement to read, and re-implementing it
+is how the generator's idea of a prop drifts from the component's. The hook lets
+a repo answer for itself:
+
+```js
+// prism.config.js
+propsFrom(source, filePath) {
+  // return an array of props, or undefined to fall through to prism's reader
+}
+```
+
+Returning `undefined` falls through, so a hook only has to handle the files it
+knows about. Returned entries are filled in and checked — an unknown `type`, an
+entry with no usable `name`, a non-array return, or a hook that throws is
+reported as `invalid-props-from` rather than absorbed, and prism falls back to
+its own reader. Constructor defaults, documented unions and `@prop` types still
+apply on top, so a hook only has to answer the part it knows.
+
+### Fixed
+
+**A declaration prism couldn't read was dropped in silence.** This is the more
+important half, and it is independent of the hook. Nothing warned: the wrappers
+were generated with zero props, `tsc` compiled them happily (fewer props is
+still valid TypeScript), and the run exited 0. The regression was visible only
+in `git diff`. Two new findings close it, both `--strict` failures:
+
+- `unparsed-prop-declaration` — the reader saw `name:` but the value wasn't an
+  object literal. It names the prop and the declaration it couldn't read.
+- `doc-prop-undeclared` — a `@prop` JSDoc tag with no reactive property behind
+  it. The general form of the same disagreement, detectable with what prism
+  already parses, and it catches the case from either direction. A prop already
+  reported as unreadable isn't reported again here.
+
+Both are acknowledgeable, for the component that documents an inherited prop on
+purpose.
+
+**A nested option could mark a public prop internal.** The config capture was
+`(\w+)\s*:\s*\{([^}]*)\}`, which ended at the *first* `}` — so
+`{ type: Object, converter: { fromAttribute: () => ({ state: true }) } }` both
+truncated the config that was read and left the tail to be rescanned as though
+it were more properties. `state`, `type` and `reflect` are now read from the
+config's own keys only, and the properties block is walked brace-balanced rather
+than pattern-matched. The same hardening applies to `@property()` decorators.
+
 ## 2.11.1 — 2026-07-31
 
 ### Fixed
