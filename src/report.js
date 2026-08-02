@@ -97,8 +97,9 @@ export function formatBytes(n) {
  * The order that makes it promotable is to fix the cause rather than soften
  * the rule: resolve properties at runtime from `Ctor.elementProperties`, which
  * makes mixin-contributed props visible, and both the diagnostic and the
- * missing wrapper props go away together. It goes strict in 3.0, against a
- * population near zero, at a boundary where new failures are expected.
+ * missing wrapper props go away together. It goes strict once that lands, at
+ * the next major version — against a population near zero, at a boundary where
+ * new failures are expected.
  *
  * @param {import('./parser.js').Diagnostic[]} diagnostics
  */

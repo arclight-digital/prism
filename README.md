@@ -188,7 +188,7 @@ The split is deliberate. `unparsed-prop-declaration` is precise by construction 
 
 `doc-prop-undeclared` is equally true but finds a population you did not create and cannot clear on your own. **Prism reads a component's own source, so a prop contributed by a mixin is invisible to it.** A component whose `readonly` comes from a shared `FormControlMixin` documents the prop, doesn't declare it locally, and prism reports it — correctly, because the prop really is absent from the generated wrappers. In the reference consumer that is 18 findings, 16 from one mixin, with `readonly` missing from 14 React wrappers that document it. Failing a build on that is failing it for a backlog only prism can fix.
 
-So it reports for now. The fix is to resolve properties at runtime from `Ctor.elementProperties`, which makes mixin-contributed props visible — at which point the diagnostic quiets down because the underlying bug is gone, not because the rule got weaker, and the missing wrapper props come back at the same time. It becomes a strict failure in 3.0.
+So it reports for now. The fix is to resolve properties at runtime from `Ctor.elementProperties`, which makes mixin-contributed props visible — at which point the diagnostic quiets down because the underlying bug is gone, not because the rule got weaker, and the missing wrapper props come back at the same time. It becomes a strict failure once that lands, at the next major version.
 
 If you want it failing today, `--report-json` gives you the codes as data to gate on yourself.
 

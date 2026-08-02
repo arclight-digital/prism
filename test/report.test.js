@@ -136,7 +136,7 @@ describe('strictFailures', () => {
   it('does not fail on a documented @prop with nothing behind it', () => {
     // True, but it finds mixin-contributed props prism can't see — a backlog
     // the consumer didn't create and can't clear. Report-only until runtime
-    // resolution lands; promoted in 3.0. See STRICT_CODES.
+    // resolution lands; promoted at the next major. See STRICT_CODES.
     expect(strictFailures([d('doc-prop-undeclared')])).toEqual([]);
   });
 });
