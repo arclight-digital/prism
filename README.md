@@ -108,9 +108,9 @@ Prism reports what it couldn't act on, but a caller that pipes stdout and only s
 prism: --strict — 1 issue(s) reported above.
 ```
 
-It fails on: a declared prop prism could not read, a documented `@prop` with no property behind it, a generated wrapper missing an outlet the component declares, a prop name the target framework reserves, doc drift (a documented union the CSS or the component's own default contradicts), a `config.interactivity` or `config.acknowledge` entry matching nothing, and any tag, event or detail key prism had to drop.
+It fails on: a declared prop prism could not read, a generated wrapper missing an outlet the component declares, a prop name the target framework reserves, doc drift (a documented union the CSS or the component's own default contradicts), a `config.interactivity` or `config.acknowledge` entry matching nothing, and any tag, event or detail key prism had to drop.
 
-Codes it reports but does *not* fail on: `slot-name-collides-with-prop`, `children-without-default-slot`, `unknown-acknowledge-code`. Each is information rather than a defect, and an unrecognised acknowledge code in particular must never block a rollback.
+Codes it reports but does *not* fail on: `slot-name-collides-with-prop`, `children-without-default-slot`, `unknown-acknowledge-code`, `doc-prop-undeclared`. The first three are information rather than a defect, and an unrecognised acknowledge code in particular must never block a rollback. `doc-prop-undeclared` is a real defect and is report-only for a different reason — see [`config.propsFrom`](#configpropsfrom--declarations-prism-cant-read).
 
 Skipped `interactive` components and the misclassification list are deliberately *not* strict failures. Both are routine on every run, and a check that can never pass gets removed. `--strict` is a no-op in watch mode.
 
@@ -177,14 +177,20 @@ Only `name` is required; the rest is filled in. `default` is emitted verbatim in
 
 The hook is held to its contract rather than trusted: an unknown `type`, an entry with no usable `name`, a non-array return, or a hook that throws is reported as `invalid-props-from` and prism falls back to its own reader. That code is a strict failure and cannot be acknowledged — it describes a bug in the config doing the acknowledging, not a finding about a component.
 
-**Without a hook, an unreadable declaration is still reported.** It was once dropped in silence, which meant a component could lose every prop from all six wrappers and still exit 0 — fewer props is valid TypeScript, so nothing downstream noticed. Two findings now cover it, both strict failures:
+**Without a hook, an unreadable declaration is still reported.** It was once dropped in silence, which meant a component could lose every prop from all six wrappers and still exit 0 — fewer props is valid TypeScript, so nothing downstream noticed. Two findings now cover it, from opposite directions:
 
-| Code | Means |
-|------|-------|
-| `unparsed-prop-declaration` | The reader saw `name:` but the value wasn't an object literal. Names the prop and the declaration. |
-| `doc-prop-undeclared` | A `@prop` JSDoc tag with no reactive property behind it — the same disagreement seen from the documentation side. |
+| Code | Means | `--strict` |
+|------|-------|-----------|
+| `unparsed-prop-declaration` | The reader saw `name:` but the value wasn't an object literal. Names the prop and the declaration. | **fails** (acknowledgeable) |
+| `doc-prop-undeclared` | A `@prop` JSDoc tag with no reactive property behind it — the same disagreement seen from the documentation side. | reports only |
 
-Both are acknowledgeable, for the component that documents an inherited prop deliberately.
+The split is deliberate. `unparsed-prop-declaration` is precise by construction — it fires only where prism genuinely could not read a declaration — and the build it turns red belonged to someone already losing props in silence, so red is strictly better.
+
+`doc-prop-undeclared` is equally true but finds a population you did not create and cannot clear on your own. **Prism reads a component's own source, so a prop contributed by a mixin is invisible to it.** A component whose `readonly` comes from a shared `FormControlMixin` documents the prop, doesn't declare it locally, and prism reports it — correctly, because the prop really is absent from the generated wrappers. In the reference consumer that is 18 findings, 16 from one mixin, with `readonly` missing from 14 React wrappers that document it. Failing a build on that is failing it for a backlog only prism can fix.
+
+So it reports for now. The fix is to resolve properties at runtime from `Ctor.elementProperties`, which makes mixin-contributed props visible — at which point the diagnostic quiets down because the underlying bug is gone, not because the rule got weaker, and the missing wrapper props come back at the same time. It becomes a strict failure in 3.0.
+
+If you want it failing today, `--report-json` gives you the codes as data to gate on yourself.
 
 ### `--report-json` — findings as data
 

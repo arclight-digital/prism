@@ -34,17 +34,36 @@ apply on top, so a hook only has to answer the part it knows.
 important half, and it is independent of the hook. Nothing warned: the wrappers
 were generated with zero props, `tsc` compiled them happily (fewer props is
 still valid TypeScript), and the run exited 0. The regression was visible only
-in `git diff`. Two new findings close it, both `--strict` failures:
+in `git diff`. Two new findings close it, from opposite directions:
 
 - `unparsed-prop-declaration` — the reader saw `name:` but the value wasn't an
   object literal. It names the prop and the declaration it couldn't read.
+  **Fails `--strict`**, and is acknowledgeable.
 - `doc-prop-undeclared` — a `@prop` JSDoc tag with no reactive property behind
-  it. The general form of the same disagreement, detectable with what prism
-  already parses, and it catches the case from either direction. A prop already
+  it. The same disagreement seen from the documentation side, so it catches the
+  case even where nothing looks unreadable. **Reports only.** A prop already
   reported as unreadable isn't reported again here.
 
-Both are acknowledgeable, for the component that documents an inherited prop on
-purpose.
+Only the second half of that split is a judgement call.
+`unparsed-prop-declaration` fires only where prism genuinely could not read a
+declaration, so the build it turns red belonged to someone already losing props
+in silence.
+
+`doc-prop-undeclared` is equally true and finds far more, because prism reads a
+component's own source and a prop contributed by a mixin is invisible to it. A
+component whose `readonly` comes from a shared `FormControlMixin` documents the
+prop, declares it nowhere locally, and gets reported — correctly, since the prop
+really is missing from the generated wrappers. In the reference consumer that is
+18 findings, 16 from one mixin, with `readonly` absent from 14 React wrappers
+that document it. None of it was introduced by the consumer and none of it can
+be cleared without prism changing first, so failing a minor upgrade on it would
+mostly teach people to pin.
+
+The fix is the cause rather than the rule: resolve properties at runtime from
+`Ctor.elementProperties`, making mixin-contributed props visible. The diagnostic
+then quiets because the bug is gone rather than because the rule got weaker, and
+the missing wrapper props return at the same time. It becomes a strict failure
+in 3.0. Until then `--report-json` gives the codes as data to gate on yourself.
 
 **A nested option could mark a public prop internal.** The config capture was
 `(\w+)\s*:\s*\{([^}]*)\}`, which ended at the *first* `}` — so

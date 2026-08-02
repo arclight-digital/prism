@@ -84,14 +84,31 @@ export function formatBytes(n) {
  * misclassification list. Both are routine on every run — failing on them would
  * mean `--strict` never passes, and a check that never passes gets removed.
  *
+ * Also deliberately not included, and for a different reason:
+ * `doc-prop-undeclared`. It is not wrong — a documented `@prop` with nothing
+ * behind it really is missing from every wrapper. It is excluded because the
+ * population it finds is one the consumer did not create and cannot clear.
+ * Prism reads a component's own source, so a prop contributed by a mixin is
+ * invisible to it: the reference consumer has 18 of these, 16 from a single
+ * form-control mixin, and `readonly` is absent from 14 React wrappers that
+ * document it. Failing a build on a backlog the consumer can't fix without
+ * prism changing first is how a minor upgrade teaches people to pin.
+ *
+ * The order that makes it promotable is to fix the cause rather than soften
+ * the rule: resolve properties at runtime from `Ctor.elementProperties`, which
+ * makes mixin-contributed props visible, and both the diagnostic and the
+ * missing wrapper props go away together. It goes strict in 3.0, against a
+ * population near zero, at a boundary where new failures are expected.
+ *
  * @param {import('./parser.js').Diagnostic[]} diagnostics
  */
 export const STRICT_CODES = [
-  // First because they are the most consequential thing prism can find: a prop
-  // it cannot read is a prop absent from every wrapper, and fewer props still
-  // typechecks, so nothing downstream notices.
+  // First because it is the most consequential thing prism can find: a prop it
+  // cannot read is a prop absent from every wrapper, and fewer props still
+  // typechecks, so nothing downstream notices. Precise by construction — it
+  // fires only where prism genuinely could not read a declaration — so the
+  // build it turns red belonged to someone already losing props in silence.
   'unparsed-prop-declaration',
-  'doc-prop-undeclared',
   'invalid-props-from',
   'wrapper-missing-slot',
   'slot-name-not-identifier',

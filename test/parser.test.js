@@ -405,6 +405,28 @@ describe('parseComponent', () => {
       expect(diagnostics.filter((d) => d.code === 'doc-prop-undeclared')).toHaveLength(0);
     });
 
+    it('reports a mixin-contributed prop, which it cannot see', () => {
+      // The reason doc-prop-undeclared is report-only. Prism reads one file,
+      // so a prop contributed by a mixin is invisible to it — and the finding
+      // is correct, because the prop really is absent from the wrappers.
+      const source = `
+        import { FormControlMixin } from '../shared/form-control-mixin.js';
+        /**
+         * @tag arc-slider
+         * @prop {boolean} readonly - non-editable
+         * @prop {string} label - field label
+         */
+        export class ArcSlider extends FormControlMixin(LitElement) {
+          static properties = { label: { type: String } };
+        }
+      `;
+      const diagnostics = [];
+      const meta = parseComponent(source, '/src/reactive/slider.js', prefix, {}, diagnostics);
+
+      expect(meta.props.map((p) => p.name)).toEqual(['label']);
+      expect(diagnostics.map((d) => [d.code, d.prop])).toEqual([['doc-prop-undeclared', 'readonly']]);
+    });
+
     it('reports a documented @prop with no declaration behind it', () => {
       const source = `
         /**

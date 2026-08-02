@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   outputSummary, misclassified, formatBytes, strictFailures, groupDiagnostics,
-  partitionAcknowledged,
+  partitionAcknowledged, ACKNOWLEDGEABLE_CODES,
 } from '../src/report.js';
 
 /** Minimal meta factory. */
@@ -125,6 +125,35 @@ describe('strictFailures', () => {
   it('orders by severity rather than discovery order', () => {
     const out = strictFailures([d('invalid-event'), d('doc-drift'), d('unmatched-override')]);
     expect(out.map((x) => x.code)).toEqual(['doc-drift', 'unmatched-override', 'invalid-event']);
+  });
+
+  it('fails on a declaration prism could not read', () => {
+    // Precise by construction: it fires only where prism genuinely couldn't
+    // read a declaration, so a red build was already losing props in silence.
+    expect(strictFailures([d('unparsed-prop-declaration')])).toHaveLength(1);
+  });
+
+  it('does not fail on a documented @prop with nothing behind it', () => {
+    // True, but it finds mixin-contributed props prism can't see — a backlog
+    // the consumer didn't create and can't clear. Report-only until runtime
+    // resolution lands; promoted in 3.0. See STRICT_CODES.
+    expect(strictFailures([d('doc-prop-undeclared')])).toEqual([]);
+  });
+});
+
+describe('acknowledgeable codes', () => {
+  it('covers the strict findings a consumer can decide about', () => {
+    expect(ACKNOWLEDGEABLE_CODES).toContain('unparsed-prop-declaration');
+  });
+
+  it('excludes codes that describe a bug in the config itself', () => {
+    // Acknowledging these would be waiving your own mistake, not a finding.
+    expect(ACKNOWLEDGEABLE_CODES).not.toContain('invalid-props-from');
+    expect(ACKNOWLEDGEABLE_CODES).not.toContain('unmatched-acknowledge');
+  });
+
+  it('excludes report-only codes, which need no waiver', () => {
+    expect(ACKNOWLEDGEABLE_CODES).not.toContain('doc-prop-undeclared');
   });
 });
 
