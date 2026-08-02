@@ -97,9 +97,14 @@ export function formatBytes(n) {
  * The order that makes it promotable is to fix the cause rather than soften
  * the rule: resolve properties at runtime from `Ctor.elementProperties`, which
  * makes mixin-contributed props visible, and both the diagnostic and the
- * missing wrapper props go away together. It goes strict once that lands, at
- * the next major version — against a population near zero, at a boundary where
- * new failures are expected.
+ * missing wrapper props go away together.
+ *
+ * That work is additive, so it lands in a 2.x minor rather than waiting for a
+ * major — arc-ui v4's declaration layer needs it to retire the
+ * `static properties` / `static contract` split, and a consumer shouldn't have
+ * to wait on a prism major for an additive fix. The promotion to strict
+ * follows in 3.0.0, against a population near zero, at a boundary where new
+ * failures are expected.
  *
  * @param {import('./parser.js').Diagnostic[]} diagnostics
  */

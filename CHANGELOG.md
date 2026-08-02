@@ -62,9 +62,9 @@ mostly teach people to pin.
 The fix is the cause rather than the rule: resolve properties at runtime from
 `Ctor.elementProperties`, making mixin-contributed props visible. The diagnostic
 then quiets because the bug is gone rather than because the rule got weaker, and
-the missing wrapper props return at the same time. It becomes a strict failure
-once that lands, at the next major version. Until then `--report-json` gives the
-codes as data to gate on yourself.
+the missing wrapper props return at the same time. That work is additive and is
+planned for a 2.x minor; the promotion to a strict failure follows in 3.0.0.
+Until then `--report-json` gives the codes as data to gate on yourself.
 
 **A nested option could mark a public prop internal.** The config capture was
 `(\w+)\s*:\s*\{([^}]*)\}`, which ended at the *first* `}` — so
