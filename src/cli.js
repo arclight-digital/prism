@@ -27,7 +27,10 @@ import { generateHTML } from './generators/html.js';
 import { generateCSS, generateCSSBundle } from './generators/css.js';
 import { sweepOrphans } from './generators/prune.js';
 import { reservedCollisions, slotSnippetNames } from './generators/identifiers.js';
-import { verifyWrapper, describeMissing } from './verify.js';
+import {
+  verifyWrapper, describeMissing, verifyRegistration, describeMissingRegister,
+} from './verify.js';
+import { registerImport } from './generators/imports.js';
 import {
   outputSummary, misclassified, formatBytes, strictFailures, groupDiagnostics,
   partitionAcknowledged,
@@ -255,7 +258,8 @@ function processFile(filePath, config) {
   const slotIdents = slotSnippetNames(meta.slots ?? [], meta.props);
   const verifyGenerated = (framework, result) => {
     if (!result?.written) return result;   // manual file — not ours to judge
-    const missing = verifyWrapper(framework, readFileSync(result.path, 'utf-8'), meta, slotIdents);
+    const content = readFileSync(result.path, 'utf-8');
+    const missing = verifyWrapper(framework, content, meta, slotIdents);
     if (missing.length > 0) {
       diagnostics.push({
         code: 'wrapper-missing-slot',
@@ -264,6 +268,20 @@ function processFile(filePath, config) {
         tag: meta.tag,
         framework,
         missing,
+      });
+    }
+
+    // The framework key is the config section's name, so the register subpath
+    // is derived from the same config the generator was handed.
+    const marker = verifyRegistration(framework, content, meta, registerImport(meta, config[framework]));
+    if (marker) {
+      diagnostics.push({
+        code: 'wrapper-missing-register',
+        message: describeMissingRegister(framework, meta, marker),
+        file: result.path,
+        tag: meta.tag,
+        framework,
+        marker,
       });
     }
     return result;
@@ -562,6 +580,7 @@ function flushDiagnostics(config) {
     'unusable-doc-type': 'documented @prop types prism could not emit safely',
     'unmatched-override': 'config.interactivity entries matching no component',
     'unmatched-acknowledge': 'config.acknowledge entries matching no finding',
+    'wrapper-missing-register': 'generated wrappers that never register their element — inert at runtime',
     'wrapper-missing-slot': 'generated wrappers missing an outlet the component declares',
     'children-without-default-slot': 'wrappers accepting children for elements with no default slot',
     'slot-none-contradicted': '`@slot none` on components that do render a default slot',

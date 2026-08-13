@@ -48,6 +48,33 @@ export function acceptsChildren(meta) {
 }
 
 /**
+ * Whether a wrapper must carry children at all — the broader question, and the
+ * one four of the six frameworks actually need answered.
+ *
+ * `acceptsChildren` asks whether there is a *default* slot for unlabelled
+ * content. React, Preact, Solid and Angular don't get to ask only that: they
+ * put children into the host's light DOM verbatim and let the browser assign
+ * them from their own `slot` attribute, so their single children outlet is the
+ * route for named-slot content too. Gating it on the default slot deleted every
+ * child from the wrappers of the 10 arc-ui components that declare only named
+ * slots — `<arc-top-bar>` has four of them and its Angular template was empty.
+ *
+ * Vue and Svelte interpose their own slot handling and emit an outlet per named
+ * slot, so their default outlet stays on `acceptsChildren`. That difference is
+ * why this is a second predicate rather than a change to the first one.
+ *
+ * `meta.slots` rather than `slotsInMarkup`, matching the named outlets Vue and
+ * Svelte already emit: a slot known only from a `@slot` tag still needs a route.
+ *
+ * @param {import('../parser.js').ComponentMeta} meta
+ * @returns {boolean}
+ */
+export function projectsChildren(meta) {
+  if (acceptsChildren(meta)) return true;
+  return (meta.slots?.length ?? 0) > 0;
+}
+
+/**
  * Map a WC property type to a TypeScript type string.
  *
  * Precedence, most authoritative first:

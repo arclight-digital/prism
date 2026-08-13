@@ -108,7 +108,7 @@ Prism reports what it couldn't act on, but a caller that pipes stdout and only s
 prism: --strict — 1 issue(s) reported above.
 ```
 
-It fails on: a declared prop prism could not read, a generated wrapper missing an outlet the component declares, a prop name the target framework reserves, doc drift (a documented union the CSS or the component's own default contradicts), a `config.interactivity` or `config.acknowledge` entry matching nothing, and any tag, event or detail key prism had to drop.
+It fails on: a declared prop prism could not read, a generated wrapper that never registers its element, a generated wrapper missing an outlet the component declares, a prop name the target framework reserves, doc drift (a documented union the CSS or the component's own default contradicts), a `config.interactivity` or `config.acknowledge` entry matching nothing, and any tag, event or detail key prism had to drop.
 
 Codes it reports but does *not* fail on: `slot-name-collides-with-prop`, `children-without-default-slot`, `unknown-acknowledge-code`, `doc-prop-undeclared`. The first three are information rather than a defect, and an unrecognised acknowledge code in particular must never block a rollback. `doc-prop-undeclared` is a real defect and is report-only for a different reason — see [`config.propsFrom`](#configpropsfrom--declarations-prism-cant-read).
 
@@ -116,9 +116,16 @@ Skipped `interactive` components and the misclassification list are deliberately
 
 ### Wrapper verification
 
-After writing each wrapper, prism reads it back and checks it still carries what the component declares: a component with a default slot must have an outlet for it, and Svelte and Vue must have one per named slot. React, Preact, Solid and Angular need no per-named-slot outlet — children go into the light DOM as-is and the browser does the slotting.
+After writing each wrapper, prism reads it back and checks two things.
 
-This exists because 2.7.0 shipped wrappers with the default slot deleted. Every check prism had asked whether the *inputs* looked right; the inputs were fine and the output was not. A generated file that stops carrying a component's own slots is a generator bug, so the check belongs in the generator rather than in whatever repo happens to consume it. It reports `wrapper-missing-slot`, and it fails `--strict`.
+**It registers its element** (`wrapper-missing-register`). Five frameworks do this with a bare `import '@arclux/arc-ui/card'`; React's value import survives because `createComponent` names the class in `elementClass`. This exists because 2.12.0's Angular wrappers named the element class in type position only — TypeScript elided the import and took `customElements.define` with it, so the built package contained *zero* imports of the element library and all 207 wrappers rendered an unupgraded `HTMLUnknownElement`. Nothing static objects to that: `tsc`, `ng-packagr --strictTemplates`, a production build and a consumer that renders a component all pass, and even prop assertions pass, because setting a property on a non-upgraded element writes an expando that reads back correctly.
+
+**It carries an outlet for the component's content** (`wrapper-missing-slot`). What that requires depends on how the framework handles slots:
+
+- **React, Preact, Solid, Angular** project children into the light DOM verbatim and let the browser assign them from the `slot` attribute. One outlet serves every slot, so it is required whenever the component declares *any* slot — named or default. Gating it on the default slot is what left the wrappers of 10 arc-ui components silently discarding every child.
+- **Svelte and Vue** interpose their own slot handling, so they need an explicit outlet per named slot, and their children outlet carries only the default one.
+
+Both checks exist because 2.7.0 shipped wrappers with the default slot deleted. Every check prism had asked whether the *inputs* looked right; the inputs were fine and the output was not. A generated file that stops carrying a component's own slots — or stops registering its own element — is a generator bug, so the check belongs in the generator rather than in whatever repo happens to consume it. Both fail `--strict`.
 
 ### `config.acknowledge` — findings you've already decided about
 
@@ -244,7 +251,7 @@ alone.
 
 ### Named slots
 
-A component with `<slot name="start">` gets a snippet prop per slot in the Svelte wrapper, and a forwarded `<slot name="start" />` in the Vue one. React, Preact, Solid and Angular need nothing — none of them treats `slot` as more than an attribute, so it reaches the element on its own.
+A component with `<slot name="start">` gets a snippet prop per slot in the Svelte wrapper, and a forwarded `<slot name="start" />` in the Vue one. React, Preact, Solid and Angular need no *per-slot* outlet — none of them treats `slot` as more than an attribute, so it reaches the element on its own — but they do need their one children outlet, because that is what puts your markup in the light DOM for the element to slot. So a component whose slots are all named still takes `children` in those four wrappers, and Angular still gets a single bare `<ng-content />`.
 
 **The `slot` attribute goes on your own element.** The wrapper adds no carrier element around your content, deliberately: a wrapper node between the shadow slot and your markup would break `::slotted()` rules and any layout the slot applies to its children. Which means the attribute has to come from you:
 
@@ -266,7 +273,7 @@ A component with `<slot name="start">` gets a snippet prop per slot in the Svelt
 
 Inside a snippet or a `<template #…>` body, `slot="start"` is ordinary markup and reaches the element intact. The older Svelte form — `<button slot="start">` as a direct child of the component — depends on Svelte preserving the attribute when it converts that child into a snippet prop; the explicit form above doesn't.
 
-**Components that take no children: `@slot none`.** A wrapper accepts `children` unless prism has positive evidence it shouldn't — either it saw named slots and no default one, or you said so. Finding no `<slot>` in the file is not evidence: a default slot rendered by a base class, a mixin, or a helper method looks identical from here, and acting on that in 2.7.0 deleted content from 111 wrappers. So for a component that genuinely has nowhere to put children — a spinner, an icon, a progress bar — say it in the class JSDoc:
+**Components that take no children: `@slot none`.** A wrapper accepts `children` unless prism has positive evidence it shouldn't — either it saw named slots and no default one, or you said so. (In React, Preact, Solid and Angular, "named slots and no default" is not enough on its own: their children outlet is the only route that content has, so it stays. The tag is honoured for a component with no slots at all, which is what it is for.) Finding no `<slot>` in the file is not evidence: a default slot rendered by a base class, a mixin, or a helper method looks identical from here, and acting on that in 2.7.0 deleted content from 111 wrappers. So for a component that genuinely has nowhere to put children — a spinner, an icon, a progress bar — say it in the class JSDoc:
 
 ```js
 /**

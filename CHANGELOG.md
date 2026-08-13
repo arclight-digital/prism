@@ -1,5 +1,77 @@
 # Changelog
 
+## 2.13.0 — 2026-08-13
+
+Reported from `arc-ui`, where a new harness mounted all six wrapper packages in
+a real browser for the first time and found three defects prism had shipped.
+Every one of them survives `tsc`, `ng-packagr --strictTemplates`, a production
+Vite build, and a consumer that imports the package and renders a component. The
+common thread is that none of them is a *compile* failure — the wrappers were
+well-typed descriptions of the wrong runtime.
+
+### Fixed
+
+**The Angular package registered no custom elements at all.** Every wrapper
+imported its element class and used it only to type the host reference, so
+TypeScript elided the import and the `customElements.define` side effect never
+reached the bundle: the built package contained zero imports of the element
+library and all 207 wrappers rendered an unupgraded `HTMLUnknownElement` — no
+shadow root, no styles, no behaviour, and every `@Input()` writing a meaningless
+expando. The generator now emits the side effect and the type separately:
+
+```ts
+import '@arclux/arc-ui/top-bar';
+import type { ArcTopBar } from '@arclux/arc-ui/top-bar';
+```
+
+The other five packages were unaffected, but for reasons that were accidents
+rather than decisions — React binds the class as a value in `elementClass`, and
+the rest emit a bare import with no binding to erase. So the property is now
+checked rather than relied on; see `wrapper-missing-register` below.
+
+Worth stating plainly, because it is why this went unnoticed for so long: a
+property written to a non-upgraded element is stored as an expando and reads
+back correctly. Prop assertions pass against a package that registers nothing.
+
+**Angular and Solid discarded children unless the component had a *default*
+slot.** `arc-top-bar` declares four named slots and no default one; its Angular
+wrapper was `template: \`\`` and its Solid wrapper had no `children` in its props
+and none in its body, so every child a consumer wrote vanished. Ten arc-ui
+components were affected in both.
+
+Both frameworks project children into the light DOM verbatim and let the browser
+assign them from the `slot` attribute, which means their single children outlet
+is the route named-slot content takes too. The rule is now: **any declared
+`<slot>`, named or default, means the wrapper forwards children.** Angular gets
+one bare `<ng-content />` — not a `select=` per slot, since assignment is the
+custom element's job, not Angular's.
+
+React and Preact moved to the same rule. Neither was broken at runtime
+(`createComponent` and `h()`'s props both carry children regardless), but their
+generated `Props` interface said a component taking `<span slot="logo">` accepts
+no children, which is false and was the only thing standing between them and the
+same defect. Vue and Svelte are unchanged: they emit an explicit outlet per named
+slot, so their children outlet correctly stays gated on the default slot.
+
+`@slot none` still means what it says for a component with no slots at all. On a
+component that has named slots, it no longer closes the only route their content
+has in the four frameworks above.
+
+### Added
+
+**`wrapper-missing-register` — a wrapper that never registers its element.**
+Prism's post-generate verification existed precisely to catch a generated file
+that stopped carrying something the component needs, and it watched the slots
+while an entire package went inert. It now also reads back the register import
+(or, for React, the `elementClass` reference that keeps the value import alive).
+It fails `--strict`, and it sorts above `wrapper-missing-slot`, because a wrapper
+that registers nothing makes everything else it gets right unobservable.
+
+The slot half of that check was strengthened at the same time. It tested
+`meta.hasDefaultSlot`, which is not the rule any generator follows, so it agreed
+with both defects above; it now asks each generator's own predicate whether the
+file should have carried an outlet.
+
 ## 2.12.0 — 2026-08-01
 
 Reported from `arc-ui`, where a move to helper-built property declarations

@@ -1270,7 +1270,7 @@ describe('a component with nothing to destructure', () => {
   });
 });
 
-describe('children only where there is a default slot', () => {
+describe('children where there is somewhere to put them', () => {
   const noSlot = {
     ...meta,
     tag: 'arc-confirm',
@@ -1291,13 +1291,15 @@ describe('children only where there is a default slot', () => {
     expect(c).toContain('{@render actions?.()}');
   });
 
-  it('React, Preact and Solid omit the children member', () => {
+  it('React, Preact and Solid keep the children member for the named slot', () => {
+    // Their one children outlet is how `<X><b slot="actions" /></X>` reaches the
+    // light DOM, so a named slot needs it just as much as a default one does.
     expect(readFileSync(generateReact(noSlot, config('out/ns-r'), tmpDir).path, 'utf-8'))
-      .not.toContain('children?: React.ReactNode;');
+      .toContain('children?: React.ReactNode;');
     expect(readFileSync(generatePreact(noSlot, config('out/ns-p'), tmpDir).path, 'utf-8'))
-      .not.toContain('children?: preact.ComponentChildren;');
+      .toContain('children?: preact.ComponentChildren;');
     expect(readFileSync(generateSolid(noSlot, config('out/ns-so'), tmpDir).path, 'utf-8'))
-      .not.toContain('children?: JSX.Element;');
+      .toContain('children?: JSX.Element;');
   });
 
   it('Vue omits the default slot but keeps named ones', () => {
@@ -1306,9 +1308,30 @@ describe('children only where there is a default slot', () => {
     expect(c).toContain('<slot name="actions" />');
   });
 
-  it('Angular omits ng-content', () => {
+  it('Angular emits one bare ng-content for the named slot', () => {
     const c = readFileSync(generateAngular(noSlot, config('out/ns-a'), tmpDir).path, 'utf-8');
-    expect(c).not.toContain('<ng-content />');
+    expect(c).toContain('template: `<ng-content />`');
+    // Assignment is the element's job — Angular only has to land the children in
+    // the host's light DOM with their `slot` attribute intact.
+    expect(c).not.toContain('ng-content select');
+  });
+
+  it('every wrapper drops children when the component declares no slot', () => {
+    const slotless = {
+      ...noSlot, template: '<div class="dot"></div>', slots: [], noDefaultSlot: true,
+    };
+    expect(readFileSync(generateSvelte(slotless, config('out/sl-s'), tmpDir).path, 'utf-8'))
+      .not.toContain('{@render children?.()}');
+    expect(readFileSync(generateReact(slotless, config('out/sl-r'), tmpDir).path, 'utf-8'))
+      .not.toContain('children?: React.ReactNode;');
+    expect(readFileSync(generatePreact(slotless, config('out/sl-p'), tmpDir).path, 'utf-8'))
+      .not.toContain('children?: preact.ComponentChildren;');
+    expect(readFileSync(generateSolid(slotless, config('out/sl-so'), tmpDir).path, 'utf-8'))
+      .not.toContain('children?: JSX.Element;');
+    expect(readFileSync(generateVue(slotless, config('out/sl-v'), tmpDir).path, 'utf-8'))
+      .not.toContain('<slot />');
+    expect(readFileSync(generateAngular(slotless, config('out/sl-a'), tmpDir).path, 'utf-8'))
+      .toContain('template: ``');
   });
 
   it('keeps children when no slot was found at all', () => {

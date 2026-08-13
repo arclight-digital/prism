@@ -116,6 +116,10 @@ export const STRICT_CODES = [
   // build it turns red belonged to someone already losing props in silence.
   'unparsed-prop-declaration',
   'invalid-props-from',
+  // Above the slot check because its failure is total rather than partial: a
+  // wrapper that registers nothing renders an inert element, so every other
+  // thing it gets right is unobservable.
+  'wrapper-missing-register',
   'wrapper-missing-slot',
   'slot-name-not-identifier',
   'framework-reserved',
