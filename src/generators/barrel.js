@@ -112,6 +112,89 @@ const FRAMEWORK_CONFIGS = {
   angular: angularConfig,
 };
 
+// ── Export statement shape ──────────────────────────────────
+
+/**
+ * One `export { … } from './x.js';` statement, anchored at both ends.
+ *
+ * `[^}]` matches newlines, so this reads a statement written across several
+ * lines as happily as a single-line one — provided it is handed the whole
+ * statement. Everything below works in statements rather than lines for that
+ * reason: a barrel that has been through a formatter wraps its longer exports
+ * once they pass the print width, and matching line by line skipped every one
+ * of them silently — `barrelExclude` simply had no effect on such a file.
+ */
+const EXPORT_STATEMENT =
+  /^[ \t]*export\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['"](\.[^'"]*)['"];?\s*$/;
+
+/** A line that may open an export-from statement, wrapped or not. */
+const EXPORT_OPENER = /^[ \t]*export\s+(?:type\s+)?\{/;
+
+/**
+ * Split `content` into chunks: either an export-from statement with its match,
+ * or a line to be copied through verbatim. Continuation lines are joined onto
+ * their opener until the statement completes; a run that never completes is
+ * emitted as plain lines, so an export shape this file does not understand is
+ * left alone rather than mangled.
+ *
+ * @returns {{ raw: string, match?: RegExpMatchArray }[]}
+ */
+function exportStatements(content) {
+  const lines = content.split('\n');
+  const chunks = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    if (!EXPORT_OPENER.test(lines[i])) {
+      chunks.push({ raw: lines[i] });
+      continue;
+    }
+
+    let raw = lines[i];
+    let end = i;
+    let match = raw.match(EXPORT_STATEMENT);
+    // Stop at the next statement rather than running to end of file, so one
+    // malformed export costs its own line and not the rest of the barrel.
+    while (
+      !match
+      && end + 1 < lines.length
+      && !/^[ \t]*(?:export|import)\b/.test(lines[end + 1])
+    ) {
+      raw += '\n' + lines[++end];
+      match = raw.match(EXPORT_STATEMENT);
+    }
+
+    if (!match) { chunks.push({ raw: lines[i] }); continue; }
+    chunks.push({ raw, match });
+    i = end;
+  }
+
+  return chunks;
+}
+
+/** The identifiers of an export statement's `{ … }` list, in order. */
+function identifiersOf(identifiers) {
+  return identifiers.split(',').map((x) => x.trim()).filter(Boolean);
+}
+
+/**
+ * Rewrite a statement's `{ … }` list to `names`, keeping the layout it already
+ * had: indent, one-per-line, trailing comma. Reflowing a formatter's output
+ * would show up in a consumer's diff as churn unrelated to the change, and be
+ * flowed straight back on their next format.
+ */
+function withNames(statement, names) {
+  const list = statement.match(/\{[^}]*\}/)[0];
+  if (!list.includes('\n')) {
+    return statement.replace(/\{[^}]*\}/, () => `{ ${names.join(', ')} }`);
+  }
+
+  const indent = list.match(/\n([ \t]+)\S/)?.[1] ?? '  ';
+  const closeIndent = list.match(/\n([ \t]*)\}$/)?.[1] ?? '';
+  const trailing = /,\s*\}$/.test(list) ? ',' : '';
+  const body = names.map((n) => indent + n).join(',\n');
+  return statement.replace(/\{[^}]*\}/, () => `{\n${body}${trailing}\n${closeIndent}}`);
+}
+
 // ── Generic barrel update functions ─────────────────────────
 
 /**
@@ -170,20 +253,23 @@ function updateRootBarrel(cfg, meta, outDir) {
   }
 
   if (cfg.rootStrategy === 'root-merge') {
-    // WC-style: try to add to an existing tier re-export line
+    // WC-style: try to add to an existing tier re-export.
+    //
+    // Unanchored, and rewritten through `withNames`, so a tier export a
+    // formatter has wrapped is found and merged into rather than missed — the
+    // line-anchored version wrote a second statement for the same module.
+    // `[^}]*` cannot cross a `}`, so the match still begins at an `export {`
+    // and ends at that statement's own brace.
     const tierExportPattern = new RegExp(
-      `^(export\\s*\\{[^}]*\\}\\s*from\\s*['"]\\./${meta.tier}/index\\.js['"];?)$`,
-      'm'
+      `export\\s*\\{[^}]*\\}\\s*from\\s*['"]\\./${meta.tier}/index\\.js['"];?`
     );
     const tierMatch = content.match(tierExportPattern);
 
     if (tierMatch) {
-      const oldLine = tierMatch[0];
-      const newLine = oldLine.replace(
-        /\}\s*from/,
-        `, ${meta.className} } from`
-      );
-      writeFileSync(barrelPath, content.replace(oldLine, newLine));
+      const statement = tierMatch[0];
+      const names = identifiersOf(statement.match(/\{([^}]*)\}/)[1]);
+      const merged = withNames(statement, [...names, meta.className]);
+      writeFileSync(barrelPath, content.replace(statement, () => merged));
     } else {
       const exportLine = cfg.rootExportLines(meta);
       const updated = content.trimEnd() + '\n' + exportLine + '\n';
@@ -377,16 +463,15 @@ function exportedName(identifier) {
 function repairBarrel(path, dir, excludedNames = new Set()) {
   const content = readFileSync(path, 'utf-8');
   const removed = [];
-  const lines = [];
+  const out = [];
 
-  for (const line of content.split('\n')) {
-    const match = line.match(/^export\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['"](\.[^'"]*)['"];?\s*$/);
-    if (!match) { lines.push(line); continue; }
+  for (const chunk of exportStatements(content)) {
+    if (!chunk.match) { out.push(chunk.raw); continue; }
 
-    const [, identifiers, specifier] = match;
+    const [, identifiers, specifier] = chunk.match;
     const resolved = resolveSpecifier(dir, specifier);
 
-    // Unresolvable specifier: the whole line is broken.
+    // Unresolvable specifier: the whole statement is broken.
     if (!resolved) {
       removed.push(specifier);
       continue;
@@ -396,13 +481,13 @@ function repairBarrel(path, dir, excludedNames = new Set()) {
     // the component is generated and reachable by its own subpath — so nothing
     // else here would drop it, and the append path never removes anything.
     if (excludedNames.size > 0) {
-      const names = identifiers.split(',').map((x) => x.trim()).filter(Boolean);
+      const names = identifiersOf(identifiers);
       const keep = names.filter((n) => !excludedNames.has(exportedName(n)));
       if (keep.length !== names.length) {
         for (const n of names) {
           if (excludedNames.has(exportedName(n))) removed.push(exportedName(n));
         }
-        if (keep.length > 0) lines.push(line.replace(/\{[^}]*\}/, `{ ${keep.join(', ')} }`));
+        if (keep.length > 0) out.push(withNames(chunk.raw, keep));
         continue;
       }
     }
@@ -412,23 +497,23 @@ function repairBarrel(path, dir, excludedNames = new Set()) {
     // exporting — the file itself exists either way.
     if (targetIsBarrel(resolved)) {
       const targetText = readFileSync(resolved, 'utf-8');
-      const names = identifiers.split(',').map((x) => x.trim()).filter(Boolean);
+      const names = identifiersOf(identifiers);
       const live = names.filter((n) => hasIdentifier(targetText, sourceName(n)));
-      if (live.length === names.length) { lines.push(line); continue; }
+      if (live.length === names.length) { out.push(chunk.raw); continue; }
       for (const n of names) {
         if (!hasIdentifier(targetText, sourceName(n))) removed.push(sourceName(n));
       }
-      if (live.length > 0) lines.push(line.replace(/\{[^}]*\}/, `{ ${live.join(', ')} }`));
+      if (live.length > 0) out.push(withNames(chunk.raw, live));
       continue;
     }
 
-    lines.push(line);
+    out.push(chunk.raw);
   }
 
   if (removed.length === 0) return null;
   // trimEnd + single newline, matching how the append path above writes, so a
   // prune never shows up in a diff as a whitespace change.
-  writeFileSync(path, lines.join('\n').trimEnd() + '\n');
+  writeFileSync(path, out.join('\n').trimEnd() + '\n');
   return { path, removed: [...new Set(removed)] };
 }
 

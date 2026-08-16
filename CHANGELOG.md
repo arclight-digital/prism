@@ -1,5 +1,46 @@
 # Changelog
 
+## 2.13.1 — 2026-08-15
+
+Reported from `arc-ui`, from a single catalog change that added 15 tags to
+`barrelExclude` and deleted 5 components. Both defects are in barrel
+maintenance, neither ships a broken package, and arc-ui's own checks caught
+both — but one of them is silent inside prism and the other reports as somebody
+else's error.
+
+### Fixed
+
+**`barrelExclude` could not remove a name from a barrel a formatter had
+wrapped.** Removal matched one line at a time, so an export statement written
+across several lines — what any formatter produces once a barrel passes its
+print width — matched nothing and was copied through untouched. The config entry
+simply had no effect, and nothing reported it: the gate on the append is the
+only other place `barrelExclude` is enforced, and it can keep a name out but
+never take one back. So the bug was invisible for as long as every excluded
+component was excluded *before* it was first generated — true for the entire
+life of arc-ui's only excluded component, and false the moment a catalog change
+excluded fifteen that were already there. Barrels are now read by export
+statement rather than by line. A rewritten statement keeps the layout it was
+found in — indent, one name per line, trailing comma — so a prune doesn't land
+in a consumer's diff as a reflow that their next format undoes.
+
+The same single-line constraint sat on the other end of the file: the
+web-component root barrel merges a new component into the existing re-export for
+its tier, and against a wrapped statement that pattern matched nothing and
+appended a second statement for the same module instead.
+
+**Deleting a component left every wrapper barrel naming files the same run had
+deleted.** `pruneBarrels` ran before `sweepOrphans`, and it decides what to
+remove by asking the filesystem whether a specifier still resolves — the right
+design, and the reason it never deletes a working export, but it means the
+orphans have to be gone already. They weren't: every specifier resolved,
+nothing was removed, and four lines later the files went. Deleting five
+components broke the build of all six wrapper packages with `TS2307`, and the
+run that broke them exited without saying so — a second run repaired them. The
+two calls are swapped. Barrel repair stays unconditional rather than gated
+behind `--prune`, for the reason it always was: an unbuildable barrel is a bug,
+not untidiness.
+
 ## 2.13.0 — 2026-08-13
 
 Reported from `arc-ui`, where a new harness mounted all six wrapper packages in

@@ -667,17 +667,25 @@ function writeReportJson({ active, accepted, stale }) {
  * except one would look deleted.
  */
 function runSweep(metas, config) {
-  // Barrels first, and unconditionally. Unlike an orphaned component file, a
-  // stale barrel export breaks the build of whoever imports it (TS2307), so it
-  // is not something to merely report and leave behind --prune.
-  for (const { path, removed } of pruneBarrels(config, root, metas)) {
-    console.log(`  barrel: ${relative(root, path)} (removed ${removed.join(', ')})`);
+  const { stale, removed } = sweepOrphans(metas, config, root, { apply: prune });
+  if (stale.length > 0) {
+    console.log(prune ? '\nRemoved orphaned output:' : '\nOrphaned output (no matching component):');
+    reportStale(stale, removed);
   }
 
-  const { stale, removed } = sweepOrphans(metas, config, root, { apply: prune });
-  if (stale.length === 0) return;
-  console.log(prune ? '\nRemoved orphaned output:' : '\nOrphaned output (no matching component):');
-  reportStale(stale, removed);
+  // Barrels after the sweep, never before. `pruneBarrels` decides what to drop
+  // by asking the filesystem whether a specifier still resolves, so it has to
+  // see the tree the sweep leaves behind: run first, the orphaned wrappers are
+  // all still on disk, every specifier resolves, nothing is removed — and then
+  // they are deleted underneath barrels that still name them. Deleting a
+  // component broke every wrapper package's build (TS2307) until the run after.
+  //
+  // Still unconditional, unlike the sweep itself: a barrel export whose file is
+  // genuinely gone breaks the build of whoever imports it, which is not
+  // something to merely report and leave behind --prune.
+  for (const barrel of pruneBarrels(config, root, metas)) {
+    console.log(`  barrel: ${relative(root, barrel.path)} (removed ${barrel.removed.join(', ')})`);
+  }
 }
 
 // ── Main ────────────────────────────────────────────────────
