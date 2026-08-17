@@ -20,10 +20,37 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm test
-      - run: npm publish --access public --provenance
+
+      # The tag is what triggers this, so it is worth one line to check it
+      # names what is about to be published. A tag that has drifted from
+      # package.json publishes a version nobody asked for, under a name nobody
+      # will look for it under, and the only trace is on the registry.
+      - name: Check the tag matches the version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match package.json ($VERSION)" >&2
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          # npm applies `latest` unless told otherwise — it does *not* infer it
+          # from the version. Publishing a prerelease without this puts the beta
+          # in front of every `npm install`, which is the opposite of a soak.
+          # A hyphen is semver's own prerelease marker, so it is the test.
+          case "$VERSION" in
+            *-*) echo "DIST_TAG=beta"   >> "$GITHUB_ENV" ;;
+            *)   echo "DIST_TAG=latest" >> "$GITHUB_ENV" ;;
+          esac
+
+      - run: npm publish --access public --provenance --tag "$DIST_TAG"
         env:
           NODE_AUTH_TOKEN: ""
+
       - name: Create GitHub Release
-        run: gh release create "$GITHUB_REF_NAME" --generate-notes
+        run: |
+          # Marked as a prerelease so the repo's "latest release" keeps pointing
+          # at the stable one, matching what the dist-tag just did on npm.
+          [ "$DIST_TAG" = "latest" ] || PRERELEASE=--prerelease
+          gh release create "$GITHUB_REF_NAME" --generate-notes $PRERELEASE
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
