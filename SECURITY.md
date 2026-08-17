@@ -10,7 +10,7 @@ Please do **not** open a public GitHub issue for security vulnerabilities.
 
 @arclux/prism is a code generator that reads local files and writes local files. It does not:
 - Make network requests
-- Execute user-provided code (beyond importing the config file)
+- Execute user-provided code — beyond importing the config file, and, when `config.runtime` is opted into, importing the component modules themselves
 - Access credentials or secrets
 
 Security concerns are primarily around file path handling and regex performance.

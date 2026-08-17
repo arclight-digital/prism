@@ -2,11 +2,6 @@
 
 ## 3.0.0 — 2026-08-16
 
-> Soaking as **`3.0.0-beta.1`** against the reference consumer before release.
-> Everything below is implemented and validated there; the beta exists so a
-> 202-component catalog regenerates on it for a while before the version that
-> every other consumer upgrades into. This note goes when 3.0.0 does.
-
 Scoped from `PRISM-3.md`, filed by `arc-ui` against 2.13.1. That document is not
 a bug list — every open bug was already fixed — it is an account of **the work
 the consumer was doing that prism should be doing**: seven files, about 1,235
