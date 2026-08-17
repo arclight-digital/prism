@@ -310,6 +310,16 @@ Inheriting is only ever filling a hole. Wherever the subclass spoke — its own
 default, its own union, its own `render()` — it is believed, and prism looks no
 further up.
 
+A parse is independent of every other parse of the same file, which had to be
+made true rather than merely stated. The runtime map is resolved once per run and
+read by every parse; it used to hand out its own prop objects, so each parse left
+its conclusions where the next one would read them. That was harmless for exactly
+as long as every conclusion was re-derived from the same source, and inherited
+facts are the first thing that stopped being true of — a watch rebuild would have
+read an inherited default back as the subclass's own and stopped looking for
+where it came from. Neither a single generate nor an idempotency check can see
+this, since neither parses a file twice.
+
 Where the base class isn't among the scanned components — another package, or a
 helper module doing the dispatching — a `@fires` tag is now believed rather than
 discarded. Dispatch sites stay authoritative because they carry the `detail`
