@@ -157,13 +157,15 @@ Two deliberate properties:
 
 ### `config.runtime` — resolve properties from the class
 
-Everything else here reads source text. That is the right default: it needs no toolchain, executes nothing, and is why prism can be pointed at a repo it has never seen. It has one blind spot it cannot reason its way out of — **a property contributed by a mixin or a base class is not in the file that declares the component**:
+Everything else here reads source text. That is the right default: it needs no toolchain, executes nothing, and is why prism can be pointed at a repo it has never seen. It has one blind spot it cannot reason its way out of: **the properties a component has are the properties its class has, and a property contributed by a mixin or a base class is not in the file that declares the component.**
 
 ```js
 class ArcInput extends FormControlMixin(LitElement) { … }
 ```
 
 `readonly`, `required` and `name` are real reactive properties of that element, and no amount of reading `input.js` will find them. In the reference consumer that was 16 properties from one mixin, missing from all six framework wrappers of 25 form controls: settable on the element and in plain HTML, unreachable from React or Angular.
+
+Inheritance is the sharper version of the same problem. `export class ArcModal extends ArcDialog {}` — an empty subclass with no `static properties` of its own — has every property `ArcDialog` declares and *none* that source reading can attribute to it. In the same consumer that was six props reaching no wrapper in any framework, for as long as the wrapper packages had existed: `<Modal open>` did nothing, everywhere, and the only symptom was six `doc-prop-undeclared` warnings that read as though the documentation were stale.
 
 Lit already computes the answer. `Ctor.elementProperties` is the flattened map of every reactive property the class has, mixins and superclasses included, with the declared type, the reflect flag, the attribute name and the internal `state` marker. It cannot disagree with the component, because it *is* the component:
 

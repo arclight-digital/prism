@@ -217,7 +217,23 @@ should produce these files. The message now names the fix —
 
 ### `config.runtime` — resolve properties from the class
 
-The oldest item in the ledger, and the one the rest kept pointing at.
+The oldest item in the ledger, and the one the rest kept pointing at. In one
+line: **the properties a component has are the properties its class has, and
+every attempt to compute that from one file's text is a partial answer that
+looks complete.**
+
+Three defects in the reference consumer share that shape, and none of them was
+findable from inside it:
+
+- a **mixin** contributing `readonly`, `required` and `name` — missing from all
+  six framework wrappers of 25 form controls;
+- a **base class**: `export class ArcModal extends ArcDialog {}`, an empty
+  subclass with no `static properties` of its own, so `open`, `heading`, `size`,
+  `fullscreen`, `dismissible` and `closable` reached no wrapper in any of the six
+  frameworks for as long as those packages have existed. `<Modal open>` did
+  nothing, everywhere;
+- a hardcoded tier list standing in for a file tree, which is the same mistake
+  one level up (see the exports map above).
 
 Everything else in prism reads source text, which has one blind spot it cannot
 reason its way out of: **a property contributed by a mixin or a base class is not

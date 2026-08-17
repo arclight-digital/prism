@@ -101,6 +101,41 @@ describe('resolveRuntimeProps', () => {
   });
 });
 
+describe('a subclass that declares nothing of its own', () => {
+  const MODAL = join(FIXTURES, 'modal.js');
+  let modal;
+  beforeAll(async () => { modal = await resolveRuntimeProps([MODAL], {}, () => {}); });
+
+  it('has no props at all when read from source', () => {
+    // There is no `static properties` block in the file, because there is
+    // nothing in the file. Every wrapper prism generated for this shape
+    // accepted nothing — `<Modal open>` did nothing, in all six frameworks,
+    // for as long as the packages existed.
+    const meta = parse(MODAL);
+    expect(meta.className).toBe('ArcModal');
+    expect(meta.props).toEqual([]);
+  });
+
+  it('inherits every property of its base class when read from the class', () => {
+    const props = modal.get(MODAL).classes.get('ArcModal').props.map((p) => p.name);
+    expect(props).toEqual(expect.arrayContaining(['open', 'heading', 'dismissible']));
+  });
+
+  it('stops reporting the documented props as undeclared, because they are not', () => {
+    // The finding was true of the file and false of the component, which is
+    // why it read as stale documentation and got waived. Runtime resolution
+    // doesn't silence it — it makes it stop being true.
+    const before = [];
+    parse(MODAL, { diagnostics: before });
+    expect(before.filter((d) => d.code === 'doc-prop-undeclared').map((d) => d.prop))
+      .toEqual(['open', 'heading']);
+
+    const after = [];
+    parse(MODAL, { diagnostics: after, runtime: modal.get(MODAL) });
+    expect(after.filter((d) => d.code === 'doc-prop-undeclared')).toEqual([]);
+  });
+});
+
 describe('a component parsed with its class in hand', () => {
   it('carries the mixin props the source reader cannot see', () => {
     const fromSource = parse(INPUT).props.map((p) => p.name);
