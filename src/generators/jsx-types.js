@@ -1,36 +1,21 @@
 /**
  * Generates the opt-in JSX declaration files for consumers who render the
  * custom elements *directly* — `<arc-input value="…">` — rather than through a
- * wrapper package.
+ * wrapper package. Prism knows both halves: the per-component surface, from
+ * the same parse the wrappers come from, and the per-framework attribute
+ * conventions, from writing six wrappers against them.
  *
- * These sit beside the wrappers rather than replacing them. A consumer on the
- * native path is not one to be moved off wrappers; they are one who already
- * decided, and until this existed only whoever hand-wrote a declaration file was
- * served. Prism is the right place for it because it already knows both halves:
- * the per-component surface, from the same parse the wrappers come from, and the
- * per-framework attribute conventions, from writing six wrappers against them.
+ * The base attribute set is per framework, and that is where the content is:
+ * one shared shape would type `className` for Solid (where it does nothing)
+ * and omit `on:` — Solid's event directive, and the only way to reach a
+ * custom event from JSX with no ref. Preact's `on${string}` stays loose for
+ * the opposite reason: Preact lowercases handler names, so a dashed event
+ * isn't reachable from a plain prop at all.
  *
- * ── The base attribute set is per framework, and that is where the content is ──
- *
- * Writing React's shape three times would type `className` for Solid, where it
- * does nothing, and would omit `on:` — Solid's namespaced event directive, and
- * the only way to reach a custom event like `arc-change` from JSX with no ref.
- * Preact's `on${string}` has to stay loose for the opposite reason: Preact
- * lowercases the part after `on`, so a dashed custom event name is not reachable
- * from a plain prop at all, and typing it narrowly would promise what the
- * framework cannot do.
- *
- * ── Three ways to not apply one of these files, none of them an error ──
- *
- * The activation instruction written into each file's header is load-bearing. A
- * `types` entry in tsconfig and a `/// <reference types=…>` both look right and
- * both silently do nothing: TypeScript resolves a `types` entry as a *package*
- * — `node_modules/@types/<name>`, or `<name>/package.json#types` — and never
- * follows an export-map subpath. Nothing resolves, nothing is included, every
- * tag stays untyped, and no diagnostic is emitted, because a `types` entry that
- * resolves to nothing is not an error. A `files` entry pointing outside the
- * consuming project is the third. The reference consumer shipped the wrong
- * instruction for a whole release.
+ * The activation instruction written into each file's header is load-bearing:
+ * a tsconfig `types` entry and a `/// <reference types=…>` both look right and
+ * both silently do nothing, because TypeScript resolves a `types` entry as a
+ * *package* and never follows an export-map subpath — with no diagnostic.
  */
 
 import { writeFileSync, mkdirSync } from 'node:fs';
@@ -142,14 +127,11 @@ const TARGETS = {
 export const JSX_FRAMEWORKS = Object.keys(TARGETS);
 
 /**
- * The type of a prop as written in *markup*.
- *
- * A documented union stays a union — that is what makes a wrong enum value a
- * compile error, which is most of what these files are worth. A number widens to
- * accept its string form, because `count="3"` is how a number is written as an
- * attribute and it is not wrong. Everything else is the wrapper's own type:
- * React 19, Preact and Solid all set a DOM property when the element has one, so
- * an array prop really does take an array here.
+ * The type of a prop as written in *markup*. A documented union stays a union
+ * — a wrong enum value being a compile error is most of what these files are
+ * worth. A number widens to accept its string form (`count="3"` is not wrong);
+ * everything else is the wrapper's own type, since all three frameworks set a
+ * DOM property when the element has one.
  */
 function jsxType(prop) {
   if (!prop.docType && !(prop.values?.length > 0) && prop.type === 'Number') {
@@ -165,13 +147,10 @@ function key(name) {
 
 /**
  * The members for one element: its attribute spellings, plus the property
- * spelling wherever the two differ.
- *
- * Both are emitted because both work and consumers write both. `confirmLabel`
- * is `confirmlabel` as an attribute — Lit lowercases, it does not kebab-case —
- * and a consumer who writes the camelCase form is setting the DOM property,
- * which these frameworks do for custom elements. Typing only one of the two
- * makes the other a compile error against an element that handles it fine.
+ * spelling wherever the two differ. Both are emitted because both work —
+ * `confirmLabel` is `confirmlabel` as an attribute (Lit lowercases, it does
+ * not kebab-case), and the camelCase form sets the DOM property. Typing only
+ * one makes the other a compile error against an element that handles it fine.
  */
 function elementMembers(meta, indent) {
   const lines = [];

@@ -1,18 +1,12 @@
 /**
  * What a form binds to when it binds to one of these elements.
  *
- * Angular's `formControlName`, `formControl` and `ngModel` all reach a component
- * through one interface — `ControlValueAccessor` — and a wrapper that doesn't
- * implement it doesn't fail: `<arc-input formControlName="email">` binds nothing,
- * reports nothing, and the control stays pristine and empty while the element on
- * screen holds the user's text. That silence is most of the reason this exists.
- *
- * The decision is here rather than in the Angular generator because it is not
- * really an Angular question — it is "which property does a form read and write
- * on this element, and when does the element say it changed" — and the CLI needs
- * the same answer to report the components it could not wire. A check that
- * re-derives the answer independently is a check that can agree with itself
- * while disagreeing with what was emitted.
+ * Angular's `formControlName`, `formControl` and `ngModel` all reach a
+ * component through `ControlValueAccessor`, and a wrapper without one doesn't
+ * fail — it binds nothing and reports nothing. The decision lives here rather
+ * than in the Angular generator because the CLI needs the same answer to
+ * report the components it could not wire, and a check that re-derives it
+ * independently can agree with itself while disagreeing with what was emitted.
  */
 
 import { tsType, typedDefault } from './types.js';
@@ -30,15 +24,12 @@ const DEFAULT_VALUE_PROPS = ['checked', 'value'];
 /**
  * The value a form reset writes into the element, as source text.
  *
- * Angular calls `writeValue(null)` on reset routinely, so every accessor needs
- * one — and it has to be a value the property's declared type actually admits,
- * or the wrapper package stops compiling. A union is the case that catches
- * people out: `''` is not a member of `'sm' | 'md' | 'lg'`, so the element's own
- * default is used instead, which by construction is one.
- *
- * Returns null when the type admits no empty value the generator can name — an
- * object shape with no default. The caller emits a reset that leaves the element
- * alone rather than one that doesn't compile.
+ * Angular calls `writeValue(null)` on reset routinely, and the value has to be
+ * one the declared type admits or the wrapper package stops compiling — `''`
+ * is not a member of `'sm' | 'md' | 'lg'`, so a union uses the element's own
+ * default. Returns null when the type admits no nameable empty value (an
+ * object shape with no default); the caller then emits a reset that leaves the
+ * element alone rather than one that doesn't compile.
  */
 function emptyValue(prop) {
   const type = tsType(prop);
@@ -58,12 +49,10 @@ function emptyValue(prop) {
 /**
  * The event after which the element's value is worth reading back.
  *
- * The accessor reads the live DOM property rather than the event's `detail`, so
- * the only thing required of this event is that it fires *after* the element has
- * updated itself — which is what makes `<prefix>-change` the right answer and
- * why no detail shape has to be agreed on. A control firing both `arc-input` and
- * `arc-change` commits on the second: binding the first would mark a form dirty
- * on every keystroke.
+ * The accessor reads the live DOM property, not the event's `detail`, so all
+ * this event must do is fire *after* the element has updated itself. A control
+ * firing both `arc-input` and `arc-change` commits on the second — binding the
+ * first would mark a form dirty on every keystroke.
  */
 function commitEvent(meta, prefix) {
   const conventional = `${prefix}-change`;
@@ -142,15 +131,12 @@ export function formBinding(meta, config = {}) {
     return { name, type: tsType(prop), empty: emptyValue(prop) };
   });
 
-  // A ControlValueAccessor carries exactly one value, and two of these controls
-  // bind two properties — a date range is start/end, a range slider is low/high,
-  // with no single `value` between them. Leaving them out would mean
-  // `formControlName` working on 25 of 27 controls, which is the kind of gap a
-  // consumer discovers rather than reads, so the accessor carries an object —
-  // what a reactive form holds for a compound value anyway. (A FormGroup with a
-  // control per @Input is the better shape for validating the two ends
-  // separately, works today without any of this, and cannot be reached from
-  // `[(ngModel)]`.)
+  // A ControlValueAccessor carries exactly one value, and some controls bind
+  // two properties (start/end, low/high) with no single `value` between them —
+  // so the accessor carries an object, which is what a reactive form holds for
+  // a compound value anyway. (A FormGroup with a control per @Input is the
+  // better shape for validating the two ends separately, and works without any
+  // of this — but cannot be reached from `[(ngModel)]`.)
   const composite = parts.length > 1;
   const type = composite
     ? `{ ${parts.map((p) => `${p.name}: ${p.type}`).join('; ')} }`

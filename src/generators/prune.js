@@ -71,10 +71,9 @@ function expectedOutputs(metas, config, root) {
   }
 
   // An interactive component's leftovers are already reported (and pruned) by
-  // the generator that skipped it, so the sweep treats its names as spoken for.
-  // Otherwise every such file is claimed twice — once as "component no longer
-  // produces this", once as "no matching component" — which reads like two
-  // separate problems. The sweep's job is strictly the components that are gone.
+  // the generator that skipped it, so the sweep treats its names as spoken for
+  // — otherwise each file is claimed twice, reading as two separate problems.
+  // The sweep's job is strictly the components that are gone.
   if (config.css) {
     const dir = join(root, config.css.outDir);
     add(dir, null);

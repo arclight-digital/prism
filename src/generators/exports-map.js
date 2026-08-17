@@ -1,25 +1,16 @@
 /**
  * Writes each wrapper package's `exports` map from the file tree prism just
- * generated.
- *
- * Prism decided that tree — which components exist, which tier each one lands
- * in, what extension each framework's files carry — so deriving the map from it
- * a second time, in a second program, means re-inferring facts that were known
- * at the point they were decided. The map is small; the coupling is not.
+ * generated — prism decided that tree, so a second program re-inferring it
+ * would only re-derive facts known at the point they were decided.
  *
  * Every component gets its own subpath (`@arclux/arc-ui-react/Button`), so a
- * consumer that can't tree-shake a 200-export barrel imports one component
- * without paying for the rest. Deliberately no `"./*"` wildcard: it publishes
- * every internal file as unversioned API and is exempt from the existence check
- * below — an exports surface nobody can refactor safely.
+ * consumer that can't tree-shake a large barrel imports one component without
+ * the rest. Deliberately no `"./*"` wildcard: it publishes every internal file
+ * as unversioned API and is exempt from the existence check below.
  *
- * ── Angular is absent on purpose ──
- *
- * `ng-packagr` owns the published package.json for an Angular library (Angular
- * Package Format: FESM bundles, partial-Ivy declarations, one entry point). Any
- * `exports` written into its source manifest is copied verbatim into dist and
- * ships broken, so prism refuses the configuration rather than writing something
- * that would.
+ * Angular is absent on purpose: ng-packagr owns the published package.json for
+ * an Angular library and copies a source `exports` map verbatim into dist,
+ * where it ships broken — so prism refuses the configuration (see config.js).
  */
 
 import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
@@ -100,10 +91,8 @@ export function generateExportsMap(framework, section, config, root) {
   const exports = { '.': entry(mode, 'index.ts') };
 
   // Subpaths are named after the component, not its tier, so two components
-  // sharing a name in different tiers want the same one. Whichever tier is
-  // scanned last would win, and the other component would simply have no
-  // subpath — an assignment that loses a component silently, which is the
-  // failure mode this whole file is meant to be the opposite of.
+  // sharing a name in different tiers want the same one — reported rather than
+  // letting whichever tier scans last win silently.
   const collisions = [];
 
   for (const tier of config.tiers) {
@@ -124,9 +113,8 @@ export function generateExportsMap(framework, section, config, root) {
     }
   }
 
-  // Only targets pointing at *source* are checked. A dist target names a file
-  // that does not exist until the package is built, and the build itself fails
-  // loudly about anything missing — asserting it here would mean a clean
+  // Only source targets are checked — a dist target names a file that doesn't
+  // exist until the package is built, and asserting it here would mean a clean
   // checkout could never generate.
   const missing = [];
   for (const [subpath, target] of Object.entries(exports)) {
@@ -143,9 +131,8 @@ export function generateExportsMap(framework, section, config, root) {
     pkgJson.module = 'dist/index.js';
     pkgJson.types = 'dist/index.d.ts';
   }
-  // Two spaces and a trailing newline, which is what npm itself writes — the
-  // point is for this file to stay editable by hand between runs without every
-  // regeneration reformatting the parts prism doesn't own.
+  // Two spaces and a trailing newline, matching npm itself, so regeneration
+  // never reformats the parts of the manifest prism doesn't own.
   writeFileSync(pkgJsonPath, `${JSON.stringify(pkgJson, null, 2)}\n`);
 
   return {

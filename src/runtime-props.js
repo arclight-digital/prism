@@ -1,42 +1,21 @@
 /**
  * Resolve a component's properties from the class itself, by importing it.
  *
- * Everything else in prism reads source text. That is the right default — it
- * needs no toolchain, executes nothing, and is why prism can be pointed at a
- * repo it has never seen. It also has one blind spot it cannot reason its way
- * out of: **a property contributed by a mixin or a base class is not in the file
- * that declares the component.**
+ * Everything else in prism reads source text, which needs no toolchain and
+ * executes nothing — but a property contributed by a mixin or a base class is
+ * not in the file that declares the component, and no amount of source reading
+ * finds it. `Ctor.elementProperties` is Lit's own flattened map of every
+ * reactive property the class has, mixins and superclasses included, with the
+ * declared type, reflect flag, attribute name and `state` marker.
  *
- *   class ArcInput extends FormControlMixin(LitElement) { … }
+ * Opt-in (`config.runtime`), because importing a module runs it and prism
+ * otherwise executes none of a consumer's code. It degrades rather than fails:
+ * a module that throws on import costs that one component its runtime answer
+ * and nothing else.
  *
- * `readonly`, `required` and `name` are real reactive properties of that
- * element, and no amount of reading `input.js` will find them. In the reference
- * consumer that was 16 properties from one mixin, absent from **all six
- * framework wrappers of 25 form controls** — settable on the element and in
- * plain HTML, unreachable from React or Angular, and invisible for two releases.
- * `config.propsFrom` could paper over it only by re-implementing the mixin's
- * contribution in a second place, which is a second thing to keep in step.
- *
- * Lit already computes the answer. `Ctor.elementProperties` is the flattened map
- * of every reactive property the class has, mixins and superclasses included,
- * with the declared type, the reflect flag, the attribute name and the internal
- * `state` marker — built by Lit itself, at the moment the class is finalized. It
- * cannot disagree with the component, because it *is* the component.
- *
- * ── Why this is opt-in ──
- *
- * Reading it means importing the module, and importing a module runs it. Prism
- * has never executed a line of a consumer's code, and turning that on silently
- * in a minor would be a change of kind, not degree. So it is `config.runtime`,
- * off unless asked for, and it degrades rather than fails: a module that throws
- * on import costs that one component its runtime answer and nothing else.
- *
- * ── What it does not answer ──
- *
- * Defaults, documented `@prop` unions and CSS-inferred enums still come from the
- * source, and still apply on top. The class knows what a property *is*; the file
- * knows what the author said about it. Both are needed, and neither is a
- * substitute for the other.
+ * Defaults, documented `@prop` unions and CSS-inferred enums still come from
+ * source and apply on top — the class knows what a property *is*, the file
+ * knows what the author said about it.
  */
 
 import { pathToFileURL } from 'node:url';
@@ -51,17 +30,14 @@ const KNOWN_TYPES = new Set(['String', 'Boolean', 'Number', 'Array', 'Object']);
 /**
  * Make importing a component module survivable.
  *
- * One thing here is not optional. `customElements.define` throws on a duplicate
- * tag, exactly as it does in a browser, and prism hits duplicates as a matter of
- * course: watch mode re-imports an edited file, and two files in a catalog can
- * name the same tag. A registry that keeps the first definition and ignores the
- * rest turns a fatal into a no-op, and prism never needs the registry's contents
- * — it reads the class it imported, not the one the registry holds.
+ * `customElements.define` throws on a duplicate tag, and prism hits duplicates
+ * routinely — watch mode re-imports edited files, and two files can name the
+ * same tag. The registry here keeps the first definition and ignores the rest;
+ * prism reads the class it imported, never the one the registry holds.
  *
- * `HTMLElement` is a fallback and nothing more. Lit 3 carries its own DOM shim
- * and keeps using it, so this is only reached by a component that extends
- * `HTMLElement` directly. Installed with `??=` so a real DOM, or a shim the
- * project installed itself through `config.runtime.setup`, always wins.
+ * `HTMLElement` is a fallback only — Lit 3 carries its own DOM shim — and is
+ * installed with `??=` so a real DOM, or a shim from `config.runtime.setup`,
+ * always wins.
  */
 function installGlobals() {
   globalThis.HTMLElement ??= class HTMLElement {};
@@ -84,17 +60,11 @@ function installGlobals() {
 }
 
 /**
- * Make `customElements.define` survive being called twice with the same tag.
- *
- * Wrapping rather than replacing, because the registry may not be ours: Lit
- * installs its own the moment a component is imported, and a project's
- * `config.runtime.setup` may install a fuller one still. Whatever it is keeps
- * every behaviour except throwing on a repeat, which is the one prism cannot
- * live with — a watch rebuild re-imports an edited file, and two files in a
- * catalog can name the same tag.
- *
- * Idempotent, so it can be called again after a setup module has had its turn
- * at the global.
+ * Make `customElements.define` survive a repeated tag. Wrapping rather than
+ * replacing, because the registry may not be ours — Lit installs its own, and
+ * `config.runtime.setup` may install a fuller one still; whatever it is keeps
+ * every behaviour except throwing on a repeat. Idempotent, so it can run again
+ * after a setup module has had its turn at the global.
  */
 function tolerateDuplicateDefines() {
   const registry = globalThis.customElements;
@@ -185,19 +155,13 @@ function readClass(Ctor) {
  * @returns {Promise<{ classes: Map<string, object> }|{ error: string }>}
  */
 async function loadModule(filePath, { bust = false } = {}) {
-  // Deliberately *not* cache-busted by default, and this is load-bearing rather
-  // than an omission.
-  //
-  // A query string makes Node treat the URL as a different module, but only for
-  // the import that carries it: `modal.js?v=1` still resolves its own
-  // `import './dialog.js'` to the plain, already-cached module. So a busted
-  // module's base class is a *different object* from the one registered when
-  // that base was loaded directly, ancestry stops matching by identity, and a
-  // subclass silently loses the events and slots it inherits — reintroducing
-  // the exact bug this feature exists to fix, one query string at a time.
-  //
-  // Busting is therefore only for the watcher, where a stale class is the worse
-  // of the two problems and the ancestry link is carried forward instead.
+  // Not cache-busted by default, and that is load-bearing. A query string makes
+  // Node treat the URL as a new module, but only for the import that carries
+  // it: `modal.js?v=1` still resolves its own `import './dialog.js'` to the
+  // plain cached module, so the busted module's base class is a *different
+  // object*, ancestry stops matching by identity, and a subclass loses its
+  // inherited events and slots. Busting is only for the watcher, where a stale
+  // class is the worse problem and the ancestry link is carried forward.
   let stamp = '';
   if (bust) {
     try {
@@ -227,22 +191,12 @@ async function loadModule(filePath, { bust = false } = {}) {
  * Record, for each component class, the nearest ancestor that is also a
  * component in this catalog.
  *
- * `elementProperties` already flattens inherited *properties*, so nothing above
- * needs this. Everything else a component declares does not flatten, because it
- * isn't data on the class: the events it dispatches, the slots it renders, its
- * template and its styles all live in source that belongs to the base class's
- * file. A subclass that declares none of its own —
- * `export class ArcModal extends ArcDialog {}` — has a source file with nothing
- * in it, and reading that file yields a component with no events, no slots and
- * no template.
- *
- * Props alone coming back is the dangerous half-fix: a wrapper missing only its
- * event handlers passes any comparison of prop lists. So the link is recorded
- * here, and the CLI uses it to inherit the rest from the ancestor's own parse.
- *
- * Identity is the constructor object itself — the same value the subclass's
- * prototype chain points at — so this cannot be wrong about which class is
- * which, whatever the files are named.
+ * `elementProperties` flattens inherited *properties*; events, slots, template
+ * and styles do not flatten, because they live in the base class's source file.
+ * The link recorded here is what lets the CLI inherit those from the ancestor's
+ * own parse (see inherit.js). Identity is the constructor object itself — the
+ * value the subclass's prototype chain points at — so this cannot be wrong
+ * about which class is which, whatever the files are named.
  */
 function linkAncestry(resolved) {
   const owner = new Map();
@@ -270,10 +224,9 @@ function linkAncestry(resolved) {
 /**
  * Resolve runtime property information for a set of component files.
  *
- * Sequential rather than concurrent on purpose: these are ES module imports
- * with side effects — they register custom elements and can touch shared
- * globals — and a catalog is a few hundred already-resolved local files, so the
- * wall-clock difference is small and the ordering guarantee is worth more.
+ * Sequential on purpose: these imports have side effects (element registration,
+ * shared globals), and over a few hundred local files the ordering guarantee is
+ * worth more than the wall-clock difference.
  *
  * @param {string[]} files
  * @param {object} runtimeConfig - the normalized `config.runtime` section
@@ -285,11 +238,11 @@ function linkAncestry(resolved) {
 export async function resolveRuntimeProps(files, runtimeConfig, warn, opts = {}) {
   installGlobals();
 
-  // A project whose components need more of a DOM than Lit's own shim provides
-  // points at a module that installs one — `@lit-labs/ssr`'s global shim, or
-  // its own. Imported once, before anything else, and a failure here is fatal
-  // to the runtime pass rather than to each file in turn: every component would
-  // fail the same way, and 200 identical findings describe one problem.
+  // A project needing more DOM than Lit's shim provides points at a module that
+  // installs one (`@lit-labs/ssr`'s global shim, or its own). Imported once,
+  // before anything else; a failure here is fatal to the whole runtime pass
+  // rather than to each file in turn — every component would fail identically,
+  // and hundreds of identical findings describe one problem.
   if (runtimeConfig.setup) {
     try {
       await import(pathToFileURL(runtimeConfig.setup).href);

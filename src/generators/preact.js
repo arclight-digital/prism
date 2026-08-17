@@ -66,10 +66,9 @@ export function generatePreact(meta, config, root) {
   for (const event of meta.events) {
     lines.push(`  ${eventToHandlerName(event)}?: (e: CustomEvent) => void;`);
   }
-  // Any declared slot, named or default. Children reach the element regardless
-  // — an undestructured `children` rides `...rest` into `h()`'s props — so this
-  // moves them onto the explicit third argument and, more to the point, stops
-  // the interface from denying a member the component does accept.
+  // Any declared slot, named or default — children reach the element either
+  // way (an undestructured `children` rides `...rest` into `h()`'s props), so
+  // the point is to stop the interface denying a member the component accepts.
   const takesChildren = projectsChildren(meta);
   if (takesChildren) lines.push('  children?: preact.ComponentChildren;');
   lines.push(...passthroughMembers(meta.props, '  '));

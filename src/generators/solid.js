@@ -43,22 +43,16 @@ export function generateSolid(meta, config, root) {
   lines.push(`import '${registerImport(meta, config)}';`);
   lines.push('');
 
-  // Solid's JSX has no IntrinsicElements entry for custom elements, so the
-  // tag below wouldn't compile without this augmentation. Deliberately just
+  // Solid's JSX has no IntrinsicElements entry for custom elements, so the tag
+  // below wouldn't compile without this augmentation. Deliberately just
   // Record<string, unknown> — the wrapper's props interface is the typed
-  // surface consumers touch, and intersecting HTMLAttributes here would be
-  // stricter than the passthrough members the wrapper itself declares.
+  // surface consumers touch.
   //
-  // `solid-js/jsx-runtime`, not `solid-js`. Under the standard Solid setup —
-  // `jsx: "preserve"`, `jsxImportSource: "solid-js"` — TypeScript resolves
-  // JSX.IntrinsicElements through the *jsx-runtime* entry, which re-exports the
-  // namespace from `solid-js/types/jsx`. Augmenting the main entry declares a
-  // second, unrelated JSX namespace that nothing consults, and merging into an
-  // unused namespace is not an error, so there is no diagnostic: 201 wrappers
-  // in the reference consumer carried the block and none of it applied. Not
-  // visible from the solid package's own build either — it compiles either way,
-  // because the wrapper types its props separately and the intrinsic lookup only
-  // matters to a consumer writing `<arc-input>` directly.
+  // `solid-js/jsx-runtime`, not `solid-js`: under `jsxImportSource: "solid-js"`
+  // TypeScript resolves JSX.IntrinsicElements through the jsx-runtime entry.
+  // Augmenting the main entry declares a second, unrelated JSX namespace that
+  // nothing consults — with no diagnostic, since merging into an unused
+  // namespace is not an error.
   lines.push(`declare module 'solid-js/jsx-runtime' {`);
   lines.push(`  namespace JSX {`);
   lines.push(`    interface IntrinsicElements {`);

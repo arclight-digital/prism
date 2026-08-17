@@ -41,15 +41,11 @@ export function generateSvelte(meta, config, root) {
   lines.push(`  import type { Snippet } from 'svelte';`);
   lines.push('');
 
-  // One snippet prop per named slot. Without these the content is lost outright:
-  // Svelte routes `slot="start"` on a component's child to a prop of that name,
-  // so if the wrapper doesn't declare it and doesn't render it, it renders
-  // nowhere — silently, with a clean build and a clean typecheck.
-  //
-  // Rendered bare, with no carrier element, so `::slotted()` rules and any
-  // layout the shadow slot applies to its children still see the real content.
-  // The consequence is that the `slot` attribute has to be on the consumer's own
-  // element; inside a `{#snippet}` body it is ordinary markup and survives.
+  // One snippet prop per named slot — a slot the wrapper doesn't declare and
+  // render renders nowhere, silently, with a clean build. Rendered bare, with
+  // no carrier element, so `::slotted()` rules and slot layout still see the
+  // real content; the consequence is that the `slot` attribute has to be on
+  // the consumer's own element, where a `{#snippet}` body leaves it intact.
   const slotSnippets = slotSnippetNames(meta.slots ?? [], meta.props);
 
   // Props interface
@@ -102,12 +98,9 @@ export function generateSvelte(meta, config, root) {
 
   lines.push(`  let { ${destructured.join(', ')} }: Props = $props();`);
 
-  // Props whose name changes under lowercasing can't be attributes at all —
-  // Svelte writes `confirmLabel` as `confirmlabel`, which Lit never observes, so
-  // the element silently keeps its constructor default. Kebab-case would be
-  // worse: Lit's Boolean converter is presence-based, so `auto-resize="false"`
-  // reads as true. These are set as properties instead, and left out of the
-  // template below so no dead attribute is emitted alongside.
+  // Props whose name changes under lowercasing can't be attributes at all (see
+  // mixedCaseProps) — set as properties instead, and left out of the template
+  // below so no dead attribute is emitted alongside.
   const viaProperty = mixedCaseProps(meta.props);
   if (viaProperty.length > 0) {
     lines.push('');
@@ -172,9 +165,9 @@ export function generateSvelte(meta, config, root) {
     }
     lines.push('>');
   }
-  // Named slots first, in template order, then the default children. Order is
-  // cosmetic for correctly-attributed content — the shadow slot decides where it
-  // lands — but it keeps the emitted markup reading like the component's own.
+  // Named slots first, then the default children. Order is cosmetic — the
+  // shadow slot decides where content lands — but keeps the emitted markup
+  // reading like the component's own.
   for (const ident of slotSnippets.values()) {
     lines.push(`  {@render ${ident}?.()}`);
   }

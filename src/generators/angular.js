@@ -1,27 +1,18 @@
 /**
  * Generates Angular standalone component (.ts) files from ComponentMeta.
  *
- * The component attaches to the custom element itself (element selector, no
- * inner element in the template). The v2 shape rendered a second `<arc-x>`
- * inside the template while the host — carrying the same tag — upgraded into
- * a real instance of the element too, so every wrapper double-rendered:
- * doubled borders and ARIA, with the bindings reaching only the inner copy.
+ * The component attaches to the custom element itself — element selector, no
+ * inner element in the template. Rendering a second `<arc-x>` inside the
+ * template double-renders, because the host carries the same tag and upgrades
+ * into a real instance too. Host attachment also retires the whole
+ * attr-vs-property binding matrix: inputs are accessor pairs writing the DOM
+ * property directly, which works for every prop name and type.
  *
- * Host attachment also retires the entire attr-vs-property binding matrix the
- * v2 generator carried (boolean/array/object props, names that change under
- * lowercasing, template-grammar reserved words like `as`): inputs are accessor
- * pairs that write the DOM property on the host directly, which works
- * uniformly for every prop name and type.
- *
- * Events need no re-emit outputs — they fire natively from the host, so
- * `(arc-change)` binds as a plain DOM event. Only the `xChange` outputs that
- * desugar Angular's `[(x)]` two-way form are generated, fed by host listeners.
- *
- * Form-associated elements also get a ControlValueAccessor, which is what makes
- * `formControlName`, `formControl` and `[(ngModel)]` work. Without one they do
- * not fail — they bind nothing and report nothing, leaving the control pristine
- * and empty while the element on screen holds the user's text. Which property a
- * form binds, and when it commits, is decided in form-control.js.
+ * Events fire natively from the host, so `(arc-change)` binds as a plain DOM
+ * event and needs no re-emit output; only the `xChange` outputs that desugar
+ * `[(x)]` are generated. Form-associated elements also get a
+ * ControlValueAccessor — which property a form binds, and when it commits, is
+ * decided in form-control.js.
  */
 
 import { writeFileSync, mkdirSync } from 'node:fs';
@@ -42,29 +33,21 @@ function syncMethodName(eventName) {
 }
 
 /**
- * The ControlValueAccessor members, appended inside the class body.
+ * The ControlValueAccessor members, appended inside the class body. Four
+ * deliberate details:
  *
- * Four details here each cost something to find:
- *
- * 1. **The listener is attached in the constructor, not through `host`.** The
- *    decorator's host metadata already maps the change event to this
- *    component's own `@Output`, and a host object cannot carry two handlers for
- *    one event. Field initializers run before the constructor body, so `_el` is
- *    populated and `inject()` has already done its work in an injection context.
- *
- * 2. **`writeValue` must not call `_onChangeFn`.** It is the form writing *into*
- *    the element; echoing it back marks the control dirty on every programmatic
- *    `setValue`. Easy to add "for symmetry" and wrong.
- *
- * 3. **The change handler reads the element, not the event.** The element has
- *    already updated itself by the time it dispatches, so there is no detail
- *    shape to agree on and a control whose event carries nothing still works.
- *
- * 4. **The reset value follows the property's declared type** — `''` for string,
- *    `false` for boolean, `0` for number, `[]` for arrays, and a union's own
- *    default for a union, because `''` is not a member of `'sm' | 'md'` and the
- *    package would not compile. Angular calls `writeValue(null)` on reset
- *    routinely, so this path is not an edge case.
+ * 1. The listener is attached in the constructor, not through `host` — the
+ *    host metadata already maps the change event to this component's own
+ *    `@Output`, and cannot carry two handlers for one event. Field
+ *    initializers run first, so `_el` is populated by then.
+ * 2. `writeValue` must not call `_onChangeFn` — it is the form writing *into*
+ *    the element, and echoing it back marks the control dirty on every
+ *    programmatic `setValue`.
+ * 3. The change handler reads the element, not the event: the element has
+ *    updated itself by dispatch time, so no detail shape has to be agreed on.
+ * 4. The reset value follows the declared type (`''`, `false`, `0`, `[]`, a
+ *    union's own default) — Angular calls `writeValue(null)` on reset
+ *    routinely, and the value must compile against the type.
  *
  * @param {ReturnType<import('./form-control.js').formBinding>} cva
  * @returns {string[]}
@@ -78,15 +61,11 @@ function accessorMembers(cva) {
   const lines = [
     '',
     '  /* ── ControlValueAccessor ──',
-    '',
     `     Bound to \`${parts.map((p) => p.name).join('` / `')}\`, committed on \`${event}\`.`,
-    '     The listener is attached here rather than through the host metadata,',
-    '     which already maps that event to this component’s own @Output and',
-    '     cannot carry two handlers for one event.',
-    '',
-    '     writeValue deliberately does not call _onChangeFn: it is the form',
-    '     writing into the element, and echoing it back would mark the control',
-    '     dirty on every programmatic setValue. */',
+    '     The listener lives in the constructor because the host metadata already',
+    '     maps that event to this component’s own @Output. writeValue deliberately',
+    '     does not call _onChangeFn: it is the form writing into the element, and',
+    '     echoing it back would mark the control dirty on every setValue. */',
     `  private _onChangeFn: (value: ${type}) => void = () => {};`,
     '  private _onTouchedFn: () => void = () => {};',
     '',
@@ -213,24 +192,21 @@ export function generateAngular(meta, config, root) {
     ];
     lines.push(`import { ${specifiers.join(', ')} } from '@angular/forms';`);
   }
-  // Two imports of one module, and the bare one is the load-bearing half. The
-  // element class is used only to type the host reference below, so a single
-  // `import { ArcTopBar }` is erased entirely by TypeScript — taking the
-  // `customElements.define` side effect with it. That shipped: the built
-  // package contained zero imports of the element library, every wrapper
-  // rendered an unupgraded `HTMLUnknownElement`, and each `@Input()` wrote an
-  // expando onto it. `import type` says the second line is meant to vanish, so
-  // registration can't depend on it accidentally surviving.
+  // Two imports of one module, and the bare one is the load-bearing half: the
+  // element class is used only in type position, so a single `import { X }`
+  // would be erased by TypeScript, taking the `customElements.define` side
+  // effect with it and leaving every wrapper an unupgraded element. `import
+  // type` marks the second line as meant to vanish, so registration can't
+  // depend on it accidentally surviving.
   lines.push(`import '${register}';`);
   lines.push(`import type { ${meta.className} } from '${register}';`);
   lines.push('');
 
   // A single bare `<ng-content />` projects consumer children into the host's
-  // light DOM; the element's own shadow slots then assign them, named ones
-  // included, from the `slot` attribute the consumer wrote. So no
-  // `<ng-content select=…>` per slot — Angular's job ends at the light DOM, and
-  // assignment is the custom element's. Which is also why the outlet is needed
-  // for a component whose slots are *all* named: it is the only route in.
+  // light DOM; the element's shadow slots then assign them — named ones
+  // included — from the `slot` attribute the consumer wrote. No `<ng-content
+  // select=…>` per slot, and the outlet is needed even when every slot is
+  // named: it is the only route in.
   const template = projectsChildren(meta) ? '<ng-content />' : '';
 
   // Host listeners feed the `xChange` outputs. The element updates itself

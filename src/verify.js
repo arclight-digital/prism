@@ -2,18 +2,14 @@
  * Post-generate verification: read back what was just written and check it
  * against what the component declared.
  *
- * Every check prism had before this one asked whether the *inputs* looked right
- * — a union contradicted by CSS, a prop name a framework reserves. None asked
- * whether the file on disk still carried what the component can receive. That
- * gap is how 2.7.0 shipped wrappers with the default slot deleted: the parser
- * was wrong, the generators faithfully did as told, every unit test passed, and
- * nothing compared the result to the component.
- *
- * This is deliberately the dumbest possible check — string matching against the
- * file that was just produced. It needs no framework toolchain, no consuming
- * repo, and no rendering. "Every slot a component declares appears in every
- * wrapper it generates" is a generator-side invariant, so it belongs here rather
- * than in a design system three packages downstream.
+ * Every other check asks whether the *inputs* looked right; none asked whether
+ * the file on disk still carries what the component can receive — the gap that
+ * once let wrappers ship with the default slot deleted while every unit test
+ * passed. Deliberately the dumbest possible check: string matching against the
+ * file just produced, needing no toolchain, consuming repo, or rendering.
+ * "Every slot a component declares appears in every wrapper" is a
+ * generator-side invariant, so it belongs here rather than three packages
+ * downstream.
  */
 
 import { acceptsChildren, projectsChildren } from './generators/types.js';
@@ -92,22 +88,12 @@ export function verifyWrapper(framework, content, meta, slotIdents = new Map()) 
   if (!spec) return [];
   const missing = [];
 
-  // Only assert the presence of something the component actually declares. A
+  // Only assert the presence of something the component actually declares — a
   // wrapper without children is correct for a component with nowhere to put
-  // them; the failure being caught is the opposite one.
-  //
-  // For the frameworks whose children outlet also carries named-slot content,
-  // "declares" means any slot at all. Reading it as "declares a *default* slot"
-  // is what left `<arc-top-bar>` — four named slots, no default — with an empty
-  // Angular template and no `children` in its Solid props, discarding every
-  // child a consumer wrote. This check ran on both and saw nothing to say.
-  //
-  // Both predicates are the generators' own, so this asks the question that
-  // actually matters — did the file come out the way the rule says — rather than
-  // re-deriving a weaker rule here and agreeing with itself. It used to test
-  // `meta.hasDefaultSlot` directly, which is not the rule either half follows:
-  // finding no slots at all is not evidence a component has none, so every
-  // wrapper keeps children in that case and nothing checked that they had.
+  // them. For frameworks whose children outlet also carries named-slot content,
+  // "declares" means any slot at all, not just the default one. Both predicates
+  // are the generators' own, so this asks whether the file came out the way the
+  // rule says, rather than re-deriving a weaker rule and agreeing with itself.
   const needsChildren = spec.carriesNamedSlots ? projectsChildren(meta) : acceptsChildren(meta);
   if (needsChildren && !content.includes(spec.childrenMarker)) {
     missing.push({ kind: 'default' });
@@ -148,17 +134,11 @@ export function describeMissing(framework, meta, missing) {
 /**
  * Whether a generated wrapper still registers its custom element.
  *
- * The check that would have caught the worst defect prism has shipped: every
- * Angular wrapper imported the element class in type position only, TypeScript
- * elided the import, and `customElements.define` never ran. The built package
- * contained zero imports of the element library. Nothing static objected —
- * `tsc`, `ng-packagr --strictTemplates`, a production build and a consumer that
- * renders a component all pass against wrappers that render an unupgraded
- * `HTMLUnknownElement`, because setting a property on one and reading it back
- * works fine. It writes an expando.
- *
- * Kept apart from the slot check because it is a different failure with a
- * different fix, and because it is the one that makes a package inert rather
+ * A wrapper that names the element class in type position only has its import
+ * elided by TypeScript, taking `customElements.define` with it — and nothing
+ * static objects: builds pass and consumers render an unupgraded
+ * `HTMLUnknownElement` whose prop assignments read back fine as expandos. Kept
+ * apart from the slot check because this failure makes a package inert rather
  * than incomplete.
  *
  * @param {string} framework - one of VERIFIABLE
@@ -177,16 +157,10 @@ export function verifyRegistration(framework, content, meta, register) {
 /**
  * Whether a form control's generated wrapper still carries its accessor.
  *
- * The same shape of check as the registration one above, for the same reason: a
- * missing ControlValueAccessor is invisible from every direction that isn't the
- * file itself. The wrapper compiles, `ng-packagr --strictTemplates` passes, and
- * a consumer writing `<arc-input formControlName="email">` gets no error — the
- * binding simply does nothing, and the control stays pristine and empty while
- * the element on screen holds the user's text.
- *
- * Only Angular. Nothing else prism generates has an equivalent — Vue's
- * `v-model` and Svelte's `bind:` are two-way bindings on a prop, which the
- * generators already emit.
+ * Same shape as the registration check: a missing ControlValueAccessor is
+ * invisible from every direction that isn't the file itself — the binding
+ * compiles, reports nothing, and does nothing. Angular only; Vue's `v-model`
+ * and Svelte's `bind:` are prop bindings the generators already emit.
  *
  * @param {string} framework
  * @param {string} content - the generated file's contents

@@ -66,26 +66,20 @@ const args = process.argv.slice(2);
 let watchMode = false;
 let configPath = null;
 let singleFile = null;
-// Stale output is reported but kept unless --prune is passed. Prism can no
-// longer regenerate these files (that is what makes them stale), so deleting
-// them is irreversible outside version control — too destructive to be implicit.
+// Stale output is reported but kept unless --prune is passed: prism can no
+// longer regenerate these files, so deleting them is irreversible outside
+// version control — too destructive to be implicit.
 let prune = false;
-// Turn everything prism reports into an exit code. A caller that pipes stdout
-// and only surfaces it when a step fails — which is how prism is actually run —
-// cannot observe a warning any other way, so on a normal run the entire report
-// is invisible. This is the flag that makes it observable.
+// Turn everything prism reports into an exit code — the only signal a caller
+// that pipes stdout and ignores it on success can observe.
 let strict = false;
-// Machine-readable findings. Grepping the human block means matching prose that
-// changes between releases — 2.5.0's regrouping silently broke a downstream
-// filter that had keyed on the word "warning". This is the contract that
-// doesn't move.
+// Machine-readable findings. The human block is prose that changes between
+// releases; this is the contract that doesn't move.
 let reportJsonPath = null;
 
 // What the component classes themselves said, when `config.runtime` is on:
-// file path → the classes that module exports. Resolved once, before any
-// parsing, because the parser is synchronous and importing is not — and because
-// one pass over the catalog with error isolation per file is easier to reason
-// about than an import interleaved with every parse.
+// file path → the classes that module exports. Resolved once before parsing —
+// the parser is synchronous and importing is not.
 let runtimeProps = new Map();
 
 // Diagnostics collected from every parse this run. Passing a collector to
@@ -93,10 +87,9 @@ let runtimeProps = new Map();
 // grouped, instead of interleaved through hundreds of per-component lines.
 const diagnostics = [];
 
-// Paths the pre-flight already reported as written by a newer prism. The
-// per-file check in `verifyGenerated` looks at the same stamp from the other
-// side of the write, so without this every downgraded file is reported twice —
-// once as what would happen, once as what did.
+// Paths the pre-flight already reported as written by a newer prism — the
+// per-file check reads the same stamp, so without this each downgraded file
+// would be reported twice.
 const reportedDowngrades = new Set();
 
 for (let i = 0; i < args.length; i++) {
@@ -211,9 +204,8 @@ function processFile(filePath, config) {
   // isn't a finding for a project that doesn't emit React wrappers.
   const enabled = ['react', 'vue', 'svelte', 'angular', 'solid', 'preact'].filter((f) => config[f]);
   for (const { prop, frameworks } of reservedCollisions(meta.props, enabled)) {
-    // The remedy is an alias, not a rename. The prop works everywhere else, so
-    // renaming it would break every working consumer to fix the broken ones —
-    // adding a second name the component falls back to breaks nobody.
+    // The remedy is an alias, not a rename — the prop works everywhere else,
+    // and a second name the component falls back to breaks nobody.
     const unaffected = enabled.filter((f) => !frameworks.includes(f));
     const stillWorks = unaffected.length > 0
       ? ` It still works in ${unaffected.join(', ')}, so prefer adding an alias prop the component falls back to over renaming.`
@@ -232,21 +224,18 @@ function processFile(filePath, config) {
     });
   }
 
-  // Slot names the Svelte wrapper had to rename. Svelte derives a snippet prop
-  // name from the `slot` attribute verbatim, and `icon-left` is a legal slot name
-  // but not a legal identifier — so the prop is `iconLeft` and the legacy
-  // `<x slot="icon-left">` form has no prop to route to. The `{#snippet}` form
-  // works; the attribute form silently doesn't, which is worth saying out loud.
+  // Slot names the Svelte wrapper had to rename: `icon-left` is a legal slot
+  // name but not a legal identifier, so the snippet prop is `iconLeft` and the
+  // legacy `<x slot="icon-left">` form has no prop to route to — worth saying
+  // out loud, since it fails silently.
   if (config.svelte && meta.slots.length > 0) {
     const propNames = new Set(meta.props.map((p) => p.name));
     for (const [slot, ident] of slotSnippetNames(meta.slots, meta.props)) {
       if (slot === ident) continue;
-      // Two different causes, and only one of them has a fix worth making.
-      // `icon-left` isn't a legal identifier, so renaming the slot is reasonable
-      // advice. `eyebrow` is a perfectly good identifier that a prop of the same
-      // name already occupies — a deliberate pairing (prop for the string case,
-      // slot to override with markup) — and renaming it would put a trailing
-      // underscore in the public HTML API of six frameworks to satisfy one.
+      // Two causes, and only the first has a fix worth making: a non-identifier
+      // slot name can reasonably be renamed; a slot sharing its name with a
+      // prop is usually a deliberate pairing, and renaming it would change the
+      // public HTML API of six frameworks to satisfy one.
       const collides = propNames.has(slot);
       diagnostics.push(collides ? {
         code: 'slot-name-collides-with-prop',
@@ -274,12 +263,10 @@ function processFile(filePath, config) {
   }
 
   // Wrappers that advertise `children` for an element with no default slot to
-  // put them in. Reported rather than acted on: the only evidence prism has is
-  // that it found no `<slot>` in this file, and a default slot rendered by a
-  // base class, a mixin or an imported helper looks exactly the same from here.
-  // 2.7.0 acted on evidence this weak and deleted content from 90 wrappers, so
-  // this states the case and leaves the call to someone who can see the whole
-  // component. `@slot none` is how they record it.
+  // put them in. Reported rather than acted on: the only evidence is that no
+  // `<slot>` was found in this file, and a default slot rendered by a base
+  // class, mixin or helper looks exactly the same from here. The call belongs
+  // to someone who can see the whole component; `@slot none` records it.
   if (
     !meta.hasDefaultSlot &&
     !meta.noDefaultSlot &&
@@ -298,14 +285,10 @@ function processFile(filePath, config) {
     });
   }
 
-  // A form-associated element whose wrapper cannot take a ControlValueAccessor.
-  // Reported rather than passed over, because the failure it prevents is silent:
-  // `<arc-input formControlName="email">` on a wrapper without an accessor binds
-  // nothing and reports nothing, and the control stays pristine and empty while
-  // the element on screen holds the user's text. Angular-gated, like the
-  // reserved-name check above — this is not a finding for a project generating
-  // no Angular wrappers. The same function the generator uses, so the report and
-  // the output can't disagree.
+  // A form-associated element whose wrapper cannot take a ControlValueAccessor
+  // — a failure that is otherwise silent: the binding compiles and does
+  // nothing. Angular-gated, like the reserved-name check above, and computed by
+  // the same function the generator uses so report and output can't disagree.
   if (config.angular) {
     const form = formBinding(meta, config.angular);
     if (form?.problem) {
@@ -332,21 +315,14 @@ function processFile(filePath, config) {
   }
 
   // Read each wrapper back and check it still carries what the component
-  // declares. Cheap, and it is the check whose absence let 2.7.0 ship wrappers
-  // with the default slot deleted — every input-side check passed, because the
-  // inputs were fine and the output was not.
+  // declares — the input-side checks can all pass while the output is wrong.
   const slotIdents = slotSnippetNames(meta.slots ?? [], meta.props);
   const verifyGenerated = (framework, result) => {
     if (!result?.written) return result;   // manual file — not ours to judge
 
-    // The file that was just overwritten carried a *newer* version stamp than
-    // the generator doing the overwriting. Nothing errors in that situation —
-    // prism rewrites every wrapper it owns from whatever version is installed,
-    // so an older one silently reverts 235 files and the only signal is a large
-    // diff in generated output nobody reads. CI then reports it as "generated
-    // files are out of date", which reads as stale committed output and invites
-    // the exact wrong fix: commit the revert. This is the run that can say
-    // otherwise, and the only one — the files now carry the older stamp, so the
+    // The file just overwritten carried a *newer* version stamp than this
+    // generator — a downgrade, which reverts rather than errors. This run is
+    // the only one that can say so: the files now carry the older stamp, so the
     // next run has nothing left to notice.
     if (result.priorVersion && !reportedDowngrades.has(result.path)) {
       diagnostics.push({
@@ -611,11 +587,9 @@ function processFile(filePath, config) {
 
 /**
  * Import the component modules and read their classes, if `config.runtime` is
- * on. A no-op otherwise, which is the default.
- *
- * Its findings go through the same collector as everything else, so a module
- * that wouldn't import is reported alongside the run it degraded rather than
- * printed loose above it.
+ * on; a no-op otherwise. Findings go through the same collector as everything
+ * else, so a module that wouldn't import is reported alongside the run it
+ * degraded.
  */
 async function loadRuntimeProps(files, config) {
   if (!config.runtime) return;
@@ -636,18 +610,13 @@ async function loadRuntimeProps(files, config) {
 
 /**
  * Look for output written by a newer prism before writing anything, and decide
- * whether this run should happen at all.
+ * whether this run should happen at all. Only for the modes that rewrite the
+ * whole tree — single-file mode is left to the per-file check.
  *
- * Only for the modes that rewrite the whole tree. Single-file mode is left to
- * the per-file check: it touches one file, and a whole-tree scan there would
- * report on files the run will never go near.
- *
- * Under `--strict` this refuses rather than reports, which is the only version
- * of this check that actually prevents anything — every other route reports the
- * revert after making it, and then clears itself on the next run because the
- * files now carry the older stamp. Not in watch mode: exiting a long-running
- * watcher on a finding would be hostile, and `--strict` is already a no-op
- * there.
+ * Under `--strict` this refuses rather than reports — the only version of the
+ * check that prevents anything; every other route reports the revert after
+ * making it. Not in watch mode, where exiting a long-running watcher on a
+ * finding would be hostile.
  *
  * @returns {boolean} true if the run should stop before generating
  */
@@ -680,28 +649,17 @@ function preflight(config) {
 function generateCatalogOutputs(metas, config, sink) {
   if (config.jsxTypes) {
     for (const r of generateJSXTypes(metas, config.jsxTypes, root)) {
-      // The "skipped" wording is the same safety rule as everywhere else, but
-      // this is the one path a consumer reaches by *migrating* — they had their
-      // own generator writing this exact file — so it says what to do rather
-      // than only what happened. Read as a failure, it looks like prism can't
-      // write the file; it is prism declining to clobber something it didn't
-      // write.
       console.log(r.written
         ? `jsx:   ${relative(root, r.path)} (${r.framework}, ${r.tags} tags)`
         : `jsx:   ${relative(root, r.path)} (skipped — not prism's; delete it to hand the file over)`);
 
-      // …and a log line is not enough, which is the difference between this and
-      // the identical skip on a wrapper. Hand-writing one wrapper is a standing
-      // arrangement — a component whose slots are built at runtime has to be
-      // authored by hand, and prism stepping around it every run is the feature.
-      // There is no such arrangement here: configuring `jsxTypes` says prism
-      // should produce these files, so a foreign file at one of those paths is
-      // near-certainly a migration that hasn't finished. Left as a log line it
-      // is one of several hundred, and the failure it hides is the quiet kind —
-      // a green pipeline still shipping the pre-migration copy, indefinitely,
-      // because nothing ever writes over it. Reported instead, so `--strict`
-      // stops once and the decision gets made; `config.acknowledge` records the
-      // decision to keep your own file.
+      // A finding, not just a log line — unlike the identical skip on a
+      // wrapper. Hand-writing a wrapper is a standing arrangement; configuring
+      // `jsxTypes` says prism should produce these files, so a foreign file at
+      // one of those paths is near-certainly an unfinished migration, and left
+      // as a log line the pipeline stays green while the pre-migration copy
+      // ships indefinitely. `config.acknowledge` records a decision to keep
+      // your own file.
       if (!r.written) {
         sink.push({
           code: 'jsx-types-not-written',
@@ -724,10 +682,9 @@ function generateCatalogOutputs(metas, config, sink) {
     const r = generateExportsMap(framework, section, config, root);
     console.log(`exports: ${relative(root, r.path)} (${r.subpaths} subpaths)`);
     for (const target of r.missing) {
-      // A subpath pointing at source that isn't there. Published, this is a
-      // consumer's `ERR_MODULE_NOT_FOUND` on an import that reads as supported;
-      // here it is a line. Only source targets are checked — a dist target names
-      // a file the package build has yet to produce.
+      // A subpath pointing at source that isn't there — published, that is a
+      // consumer's `ERR_MODULE_NOT_FOUND`. Only source targets are checked; a
+      // dist target names a file the package build has yet to produce.
       sink.push({
         code: 'exports-target-missing',
         message:
@@ -822,11 +779,8 @@ function warnUnmatchedOverrides(metas, config) {
 
 /**
  * Print everything the parse turned up, grouped and capped, and set the exit
- * code under --strict.
- *
- * Capped for the same reason the misclassification list is: a wall of lines on
- * every run trains people to scroll past it. The count is always stated in
- * full, so a truncated list never reads as a complete one.
+ * code under --strict. Capped because a wall of lines on every run trains
+ * people to scroll past it; the count is always stated in full.
  */
 function flushDiagnostics(config) {
   const LABELS = {
@@ -864,18 +818,18 @@ function flushDiagnostics(config) {
   const { active, accepted, stale } = partitionAcknowledged(diagnostics, config.acknowledge);
   const open = [...active, ...stale];
 
-  // Every heading carries the same literal prefix. The wording after it is
-  // prose and will keep changing; `prism: warning:` is the part downstream
-  // filters can rely on. `--report-json` is the sturdier answer still.
+  // Every heading carries the literal `prism: warning:` prefix — the part
+  // downstream filters can rely on; the prose after it changes between
+  // releases. `--report-json` is the sturdier answer still.
   for (const { code, entries } of groupDiagnostics(open)) {
     console.log(`\nprism: warning: ${entries.length} ${LABELS[code] ?? code}:`);
     for (const d of entries.slice(0, SHOWN)) console.log(`  ${d.message}`);
     if (entries.length > SHOWN) console.log(`  … and ${entries.length - SHOWN} more`);
   }
 
-  // Accepted findings are stated, not hidden. An allowlist that makes output
-  // disappear is how a genuine regression ends up sheltering behind an old
-  // decision — but they're one line each, since nothing is being asked of you.
+  // Accepted findings are stated, not hidden — an allowlist that makes output
+  // disappear is how a regression shelters behind an old decision. One line
+  // each, since nothing is being asked of you.
   if (accepted.length > 0) {
     console.log(`\nprism: accepted: ${accepted.length} known finding(s) waived by config.acknowledge:`);
     for (const d of accepted.slice(0, SHOWN)) {
@@ -906,10 +860,7 @@ function flushDiagnostics(config) {
 }
 
 /**
- * Write the run's findings as JSON, if asked.
- *
- * The human block is prose and reworded between releases; anything parsing it
- * is one release away from silently matching nothing. This is the stable shape:
+ * Write the run's findings as JSON, if asked. The stable shape for automation:
  * `code` is the contract, the rest is detail.
  */
 function writeReportJson({ active, accepted, stale }) {
@@ -943,16 +894,12 @@ function runSweep(metas, config) {
     reportStale(stale, removed);
   }
 
-  // Barrels after the sweep, never before. `pruneBarrels` decides what to drop
-  // by asking the filesystem whether a specifier still resolves, so it has to
-  // see the tree the sweep leaves behind: run first, the orphaned wrappers are
-  // all still on disk, every specifier resolves, nothing is removed — and then
-  // they are deleted underneath barrels that still name them. Deleting a
-  // component broke every wrapper package's build (TS2307) until the run after.
-  //
-  // Still unconditional, unlike the sweep itself: a barrel export whose file is
-  // genuinely gone breaks the build of whoever imports it, which is not
-  // something to merely report and leave behind --prune.
+  // Barrels after the sweep, never before: `pruneBarrels` asks the filesystem
+  // whether each specifier still resolves, so it must see the tree the sweep
+  // leaves behind — run first, every orphan still resolves and is then deleted
+  // underneath barrels that still name it. Unconditional, unlike the sweep: a
+  // barrel export whose file is gone breaks the build of whoever imports it
+  // (TS2307), which is not something to leave behind --prune.
   for (const barrel of pruneBarrels(config, root, metas)) {
     console.log(`  barrel: ${relative(root, barrel.path)} (removed ${barrel.removed.join(', ')})`);
   }
@@ -964,11 +911,9 @@ async function main() {
 
   if (singleFile) {
     console.log(`@arclux/prism — processing ${singleFile}`);
-    // The whole set, not just the one file, when runtime resolution is on. A
-    // component's ancestry can only be resolved against classes prism has
-    // actually imported, and a subclass whose base class wasn't loaded silently
-    // loses its events and its slots — the exact failure this mode would
-    // otherwise reintroduce one file at a time.
+    // The whole set, not just the one file, when runtime resolution is on:
+    // ancestry resolves against imported classes, and a subclass whose base
+    // wasn't loaded silently loses its inherited events and slots.
     await loadRuntimeProps(config.runtime ? discoverComponents(config) : [resolve(root, singleFile)], config);
     processFile(resolve(root, singleFile), config);
     warnUnknownAcknowledgeCodes(config);
@@ -1056,10 +1001,10 @@ async function main() {
       // per subclass; in watch mode "the run" ends at every change.
       parsedCache.clear();
       try {
-        // Re-import the edited module before re-reading it. Node caches modules
-        // for the life of the process, so without this the watcher would keep
-        // reporting on the class as it was when it started — confidently, and
-        // about a file it can no longer see. `loadModule` cache-busts by mtime.
+        // Re-import the edited module before re-reading it — Node caches
+        // modules for the life of the process, so without this the watcher
+        // keeps reporting on the class as it was at startup. `loadModule`
+        // cache-busts by mtime.
         if (config.runtime) {
           const previous = runtimeProps.get(filePath);
           const fresh = await resolveRuntimeProps(
@@ -1070,13 +1015,11 @@ async function main() {
           );
           const entry = fresh.get(filePath);
           if (entry) {
-            // A re-imported module resolves its own imports to the modules
-            // already cached, so its base class is a different object than the
-            // one ancestry was matched against and the fresh read finds no
-            // parent. The link doesn't change when a component's body is
-            // edited, so the known one is carried forward rather than lost —
-            // otherwise a subclass would shed its inherited events on the first
-            // keystroke of a watch session.
+            // A re-imported module resolves its imports to the already-cached
+            // modules, so its base class is a different object and the fresh
+            // read finds no parent. The link doesn't change when a body is
+            // edited, so the known one is carried forward — otherwise a
+            // subclass would shed its inherited events on the first keystroke.
             for (const [name, klass] of entry.classes) {
               klass.inheritsFrom ??= previous?.classes?.get(name)?.inheritsFrom;
             }

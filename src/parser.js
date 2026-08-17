@@ -68,12 +68,9 @@ const VALID_DETAIL_KEY = /^[a-z_][\w]*$/i;
  */
 
 /**
- * Build the parser's warning sink.
- *
- * With a collector the caller owns presentation — nothing is printed, because
- * the CLI aggregates these into one end-of-run block and uses them to decide
- * the exit code. Without one, warnings print as before, so a library consumer
- * calling parseComponent directly still sees them.
+ * Build the parser's warning sink. With a collector the caller owns
+ * presentation (the CLI aggregates into one end-of-run block); without one,
+ * warnings print, so a library consumer calling parseComponent still sees them.
  */
 function makeWarn(diagnostics, filePath) {
   return (code, message, extra = {}) => {
@@ -190,24 +187,13 @@ const FORM_ASSOCIATED =
  * Whether the element participates in forms.
  *
  * `static formAssociated = true` is the platform's own definition of a form
- * control — it is what makes the browser attach ElementInternals and include the
- * element in a form's submission — so no configuration is needed to decide which
- * components deserve a ControlValueAccessor. Guessing from anything softer gets
- * it wrong in both directions: "components that emit a change event" sweeps in
- * tabs, theme toggles and sortable lists, none of which is a form control.
- *
- * The hook exists because a library that puts `formAssociated` in a *mixin*
- * — `class ArcInput extends FormControlMixin(LitElement)` — carries the fact in
- * a file prism was not handed. That is the same shape `config.propsFrom` exists
- * for, so it gets the same answer: prism reads what it can read, and a repo whose
- * declarations live somewhere else answers for itself. Returning undefined falls
- * through, so a hook only has to know about the files it knows about.
- *
- * `config.runtime` removes the need for either: `formAssociated` is a static on
- * the class, so importing it answers the question the same way the browser does,
- * for a mixin-built class as readily as a plain one. The hook still wins where
- * both are present, on the same terms as `propsFrom` — explicit configuration is
- * a decision, not a guess.
+ * control, so no configuration decides which components get a
+ * ControlValueAccessor — anything softer ("emits a change event") sweeps in
+ * tabs and toggles. The hook exists for libraries that contribute the static
+ * from a mixin, in a file prism was never handed; returning undefined falls
+ * through, so a hook only answers for the files it knows. `config.runtime`
+ * reads the static off the class directly and removes the need for the hook,
+ * though a configured hook still wins — explicit configuration is a decision.
  */
 function resolveFormAssociated(source, filePath, hook, warn, tag, runtime) {
   if (typeof hook === 'function') {
@@ -265,13 +251,10 @@ const KNOWN_PROP_TYPES = new Set(['String', 'Boolean', 'Number', 'Array', 'Objec
 /**
  * Resolve a component's property declarations.
  *
- * `config.propsFrom` gets first refusal. Prism's own reader understands object
- * literals and decorators; a repo whose declarations are *built* — `selected:
- * int({ min: 0, clamp: 'toRange' })` — carries its meaning in a vocabulary
- * prism would have to re-implement to read, and re-implementing it is how the
- * generator's idea of a prop drifts from the component's. The hook lets the
- * repo answer for itself. Returning undefined falls through to the built-in
- * reader, so a hook only has to handle the files it actually knows about.
+ * `config.propsFrom` gets first refusal: a repo whose declarations are built by
+ * helpers (`selected: int({ min: 0 })`) answers for its own vocabulary rather
+ * than prism re-implementing it. Returning undefined falls through to the
+ * built-in reader, so a hook only handles the files it knows about.
  */
 function resolveProps(source, filePath, propsFrom, warn, tag, unparsed, runtime) {
   if (typeof propsFrom === 'function') {
@@ -290,38 +273,29 @@ function resolveProps(source, filePath, propsFrom, warn, tag, unparsed, runtime)
     }
     if (returned !== undefined && returned !== null) {
       const resolved = normalizeHookProps(returned, filePath, warn, tag);
-      // `fromHook` travels with the props because the one thing that cannot be
-      // validated about a hook is what it *didn't* return, and knowing the hook
-      // answered at all is what makes the cross-check below possible.
+      // `fromHook` travels with the props: what a hook *didn't* return can't be
+      // validated, and knowing it answered is what enables the cross-checks.
       if (resolved) {
-        // The hook stays authoritative — it is explicit configuration, and a
-        // repo that has one has a reason. But where the class itself was also
-        // read, there is now something far better than the `@prop` tags to check
-        // it against, and the check is worth making precisely because it found
-        // the bug this whole feature exists for: a hook that reads one file
-        // cannot see what a mixin contributed, and reports a complete answer.
+        // The hook stays authoritative — explicit configuration — but where the
+        // class was also read, it is checked against it: a hook reading one
+        // file cannot see what a mixin contributed, and reports a complete
+        // answer anyway.
         reportHookOmissions(resolved, runtime, warn, tag, filePath);
         return { props: resolved, fromHook: true };
       }
     }
   }
 
-  // The class beats the file. Everything the source reader can do here it does
-  // by pattern-matching declarations it hopes it recognises; `elementProperties`
-  // is the flattened, finalized truth, mixins and base classes included.
+  // The class beats the file: the source reader pattern-matches declarations it
+  // hopes it recognises, `elementProperties` is the flattened truth, mixins and
+  // base classes included. This also retires `unparsed-prop-declaration` — a
+  // declaration the reader couldn't parse is on the class either way.
   //
-  // Note what this also retires: the source reader is what raises
-  // `unparsed-prop-declaration`, and a declaration it could not read is no
-  // longer a prop that goes missing — the class has it either way.
-  //
-  // Copied, and that is load-bearing rather than tidy. The runtime map is
-  // resolved once per run and read by every parse of the file; the props on it
-  // are then written to all the way down this function — defaults, documented
-  // unions, CSS-inferred enums, and whatever a component inherits from the class
-  // it extends. Handing out the cached objects lets one parse leave its
-  // conclusions where the next parse reads them as the class's own, which for
-  // inherited facts means an ancestor's default surviving into a component that
-  // never had one.
+  // The copy is load-bearing, not tidy. The runtime map is resolved once per
+  // run and read by every parse of this file, and the props are written to all
+  // the way down this function (defaults, unions, inherited facts). Handing out
+  // the cached objects would let one parse's conclusions leak into the next —
+  // an ancestor's default surviving into a component that never had one.
   if (runtime) {
     return { props: runtime.props.map((p) => ({ ...p, values: [...p.values] })), fromHook: false };
   }
@@ -330,15 +304,11 @@ function resolveProps(source, filePath, propsFrom, warn, tag, unparsed, runtime)
 }
 
 /**
- * Props the class has that the hook did not return.
- *
- * The failure this names is the one `props-from-under-reports` was built for,
- * seen with certainty instead of inference. The JSDoc cross-check can only
- * compare against what someone remembered to document; this compares against the
- * property map Lit built from the class. In the reference consumer the answer
- * was `readonly` and `required`, contributed by a form-control mixin the hook
- * only ever saw one file of — missing from every wrapper of 25 components,
- * while the hook returned a well-formed array prism had no reason to doubt.
+ * Props the class has that the hook did not return — the under-reporting
+ * failure seen with certainty instead of inference. The JSDoc cross-check can
+ * only compare against what someone remembered to document; this compares
+ * against the property map Lit built from the class, where a mixin-contributed
+ * prop the hook never saw is an ordinary entry.
  */
 function reportHookOmissions(resolved, runtime, warn, tag, filePath) {
   if (!runtime) return;
@@ -362,23 +332,15 @@ function reportHookOmissions(resolved, runtime, warn, tag, filePath) {
  * altitude that fits how the props were resolved.
  *
  * Where prism read the declarations itself, each name is its own finding: the
- * JSDoc describes a component the wrappers no longer match, one prop at a time.
+ * JSDoc describes a component the wrappers no longer match.
  *
  * Where `config.propsFrom` answered, the same absence means something sharper.
- * A hook that under-reports is indistinguishable from a correct one — prism
- * validates every entry a hook *returns* (unknown type, missing name, non-array,
- * throws) and there is by construction nothing to validate about an entry it
- * never returned. Two real hook bugs shipped through that gap: an entry matcher
- * that handled block comments but not line comments, and a scanner that split on
- * a comma inside a comment. Both returned well-formed arrays prism accepted, and
- * both silently removed a prop from six wrappers.
- *
- * The `@prop` tags are the one independent account of the same component prism
- * already has, so a hook that answers for a file and returns strictly fewer
- * props than that file documents is worth a finding even when its output is
- * otherwise valid — the same insight as `doc-prop-undeclared`, applied to hook
- * output. It is one finding per file rather than per name, because the fault
- * being described is the hook's, not each prop's.
+ * Prism validates every entry a hook *returns*; there is nothing to validate
+ * about an entry it never returned, so an under-reporting hook looks correct
+ * while silently removing props from every wrapper. The `@prop` tags are the
+ * one independent account of the component prism has, so a hook returning
+ * strictly fewer props than the file documents gets a finding — one per file,
+ * not per name, because the fault is the hook's rather than any one prop's.
  */
 function reportUndeclaredDocProps(undeclared, props, fromHook, warn, tag, filePath, runtime) {
   if (undeclared.length === 0) return;
@@ -390,13 +352,9 @@ function reportUndeclaredDocProps(undeclared, props, fromHook, warn, tag, filePa
         runtime
           ? `${tag ?? 'component'} documents \`@prop ${name}\` but the class has no reactive property by that name — checked against its own elementProperties, mixins and base classes included, so the tag is describing something that does not exist. Nothing called "${name}" reaches the generated wrappers.`
           : `${tag ?? 'component'} documents \`@prop ${name}\` but declares no reactive property by that name — nothing called "${name}" reaches the generated wrappers.`,
-        // Strictness follows the evidence, which is the whole reason this
-        // finding could never be promoted before. Read from source, "no
-        // declaration here" is not the same claim as "no property" — a mixin
-        // contributes properties the file cannot show, and failing a build on
-        // that meant failing it for a backlog only prism could clear. Read from
-        // the class, the two claims are the same one, and a documented prop that
-        // is not on it is simply a stale tag.
+        // Strictness follows the evidence. Read from source, "no declaration
+        // here" is routinely untrue for mixin-contributed props; read from the
+        // class, a documented prop that is not on it is simply a stale tag.
         { tag, prop: name, strict: Boolean(runtime) }
       );
     }
@@ -618,9 +576,9 @@ function parsePropertyBlock(block, props, warn, tag, unparsed) {
     seen.add(name);
 
     // Anything that isn't an inline object literal — a helper call, a shared
-    // constant, a spread-built config — keeps its meaning somewhere prism
-    // cannot follow. Skipping it *silently* is what let a component lose every
-    // prop from all six wrappers and still exit 0, so it is reported.
+    // constant, a spread — keeps its meaning somewhere prism cannot follow.
+    // Reported rather than skipped: a silent skip is a prop missing from every
+    // wrapper with an exit code of 0.
     if (!value.startsWith('{') || !value.endsWith('}')) {
       warn(
         'unparsed-prop-declaration',
@@ -736,10 +694,9 @@ const TRIVIAL_DOC_TYPES = new Set([
 // conservative grammar. Braces are already balanced by extraction; `;` and
 // backticks are excluded because either could end the declaration early.
 const SAFE_DOC_TYPE = /^[\w\s<>[\]{}(),.|&'"?:=>-]+$/;
-// Generous rather than tight. This feature exists for the props that carry real
-// shape, and those are exactly the long ones — a three-level nested menu item is
-// legitimately ~180 characters, so the original 200 rejected the cases it was
-// built to serve. This is a sanity bound on runaway input, not a style rule.
+// Generous rather than tight — a sanity bound on runaway input, not a style
+// rule. The props with real shape are exactly the long ones, and a nested menu
+// item type is legitimately ~180 characters.
 const MAX_DOC_TYPE = 500;
 
 // Types resolvable without an import. A documented type naming anything else
@@ -759,18 +716,15 @@ const PORTABLE_TYPE_NAMES = new Set([
  *
  * Two things come out of a `@prop {…} name` tag:
  *
- *   - a **string-literal union** becomes the prop's enum values. Authored intent
- *     beats CSS inference on both counts it gets wrong: the default member
- *     usually carries no `:host([x="…"])` rule to be inferred from — it is the
- *     unqualified base style — and a variant driven from JS leaves no attribute
- *     selector at all, so the union comes back empty and the prop collapses to a
- *     bare `string` in every wrapper.
+ *   - a **string-literal union** becomes the prop's enum values. Authored
+ *     intent beats CSS inference where inference fails: the default member has
+ *     no `:host([x="…"])` rule (it is the unqualified base style), and a
+ *     variant driven from JS leaves no attribute selector at all.
  *
- *   - **any other non-trivial type** is kept verbatim as `prop.docType`. Lit's
- *     `static properties` can only say `Array`, which every generator renders as
- *     `unknown[]` — and the props that carry real shape (chart series, calendar
- *     events, table rows) are exactly the ones a consumer most needs typed. If
- *     the author wrote the shape down, it is used.
+ *   - **any other non-trivial type** is kept verbatim as `prop.docType`.
+ *     `static properties` can only say `Array`, which renders as `unknown[]` —
+ *     and the props with real shape (chart series, table rows) are exactly the
+ *     ones a consumer most needs typed.
  *
  * @param {PropMeta[]} props
  * @param {string} source
@@ -797,10 +751,9 @@ function applyDocTypes(props, source, warn, tag, unparsed = new Set()) {
     const nameMatch = /^\s+(\w+)/.exec(source.slice(afterBrace, afterBrace + 80));
     if (!nameMatch) continue;
     const prop = byName.get(nameMatch[1]);
-    // A documented prop with no declaration behind it is the one disagreement
-    // prism can detect with what it already parses — and the shape a silent
-    // prop loss takes: the JSDoc still describes the component, while the
-    // wrappers no longer have the prop.
+    // A documented prop with no declaration behind it is the shape a silent
+    // prop loss takes: the JSDoc still describes the component, the wrappers
+    // no longer have the prop.
     if (!prop) {
       // Already reported, in more detail, as an unreadable declaration.
       if (unparsed.has(nameMatch[1])) continue;
@@ -884,15 +837,10 @@ function defaultStringValue(prop) {
  *
  * A fallback for props with no documented union — see applyDocTypes. Where both
  * sources exist the documented one wins, but the CSS is still read so the two
- * can be compared: a styled value the docs don't list is genuine drift, and
- * this is the only pass positioned to see both.
- *
- * The CSS scan has the same blind spot the documented-union fix addressed: the
- * default member is the unqualified base style and so has no `:host([x="…"])`
- * rule to be found. Here the default itself supplies it — a prop's own default
- * is by construction a legal value for that prop, so unioning it in cannot be
- * wrong, and leaving it out types `size` as `'sm' | 'lg'` when the component
- * ships `'md'`.
+ * can be compared: a styled value the docs don't list is drift, and this is the
+ * only pass that sees both. On the fallback path the prop's own default is
+ * unioned in — it is by construction a legal value, and the default member has
+ * no attribute selector to be inferred from.
  *
  * @param {PropMeta[]} props
  * @param {string} css
@@ -1315,12 +1263,10 @@ function extractTemplate(source, defaults = {}) {
  */
 function extractSlots(template, source = '') {
   // Scanned over the raw source, not just the extracted template.
-  // `extractTemplate` deliberately skips nested html`` inside `${}`, so a
-  // default slot in a conditional branch —
-  // `${this.loading ? html`<spinner>` : html`<slot></slot>`}` — does not appear
-  // there at all. Reading that absence as "this component has no default slot"
-  // is what deleted children from 111 wrappers in 2.7.0. The source contains
-  // every template in the file, including the branches.
+  // `extractTemplate` skips nested html`` inside `${}`, so a default slot in a
+  // conditional branch does not appear there at all — and reading that absence
+  // as "no default slot" deletes children from every wrapper. The source
+  // contains every template in the file, branches included.
   const haystack = `${template}\n${source}`;
 
   // Names built at runtime — `name="item-${index}"` on a virtualised list — are
@@ -1492,21 +1438,14 @@ function extractEvents(source, warn, tag) {
     }
   }
 
-  // Documented events prism found no dispatch for.
-  //
-  // Dispatch sites are the better evidence and stay authoritative — they carry
-  // the `detail` shape, which is what two-way bindings are derived from, and a
-  // `@fires` tag carries nothing. But an absence of dispatch sites is not
-  // evidence of absence: a component that dispatches from a helper module, or
-  // one whose base class prism was never pointed at, has none in its own text
-  // and fires the events anyway.
-  //
-  // The two ways of being wrong are not equal. A handler prop for an event that
-  // never fires is an unused optional member someone finds by reading. A
-  // missing handler prop is a consumer's `onArcClose` that silently never runs,
-  // which is how `arc-modal` lost both its events in a refactor that touched no
-  // wrapper and no generator. So a documented event is believed, on the same
-  // terms `@prop` types are already believed for shapes prism cannot infer.
+  // Documented events prism found no dispatch for. Dispatch sites stay
+  // authoritative — they carry the `detail` shape two-way bindings derive from,
+  // a `@fires` tag carries nothing — but absence of dispatch sites is not
+  // evidence of absence: a component dispatching from a helper module, or from
+  // a base class prism was never pointed at, fires the events anyway. And the
+  // two ways of being wrong are not equal: a handler prop for an event that
+  // never fires is an unused optional member; a missing one is a consumer's
+  // handler that silently never runs. So a documented event is believed.
   for (const name of source.matchAll(/@fires\s+(?:\{[^}]*\}\s+)?([\w-]+)/g)) {
     const event = name[1];
     if (events.has(event)) continue;

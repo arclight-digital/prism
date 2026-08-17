@@ -1,49 +1,25 @@
 /**
  * What a component inherits from the component it extends.
  *
- * `config.runtime` closed half of this by itself: `Ctor.elementProperties` is
- * already flattened, so a subclass's property *declarations* come back complete
- * without anyone doing anything. The other half does not flatten, because it
- * isn't data on the class. The events a component dispatches, the slots it
- * renders, its template and its styles are all statements in source — and so are
- * the things that surround a declaration without being part of it: a default is
- * an assignment in the constructor, a union is words in a `@prop` tag. For
- *
- *   export class ArcModal extends ArcDialog {}
- *
- * that source is a file with nothing in it. Reading it yields a component with
- * no events, no slots and no template, which is exactly what it says and not at
- * all what the element does.
+ * `config.runtime` recovers a subclass's property declarations on its own —
+ * Lit flattens `elementProperties` up the prototype chain. Nothing else
+ * flattens, because nothing else is data on the class: events, slots, template
+ * and styles are statements in the base class's source file, and so are a
+ * default (a constructor assignment) and a union (a `@prop` tag). Reading
+ * `export class ArcModal extends ArcDialog {}` yields a component with none of
+ * them.
  *
  * Props alone coming back is the dangerous state, not a partial one: a wrapper
- * that has recovered its props and not its event handlers passes every
- * comparison of prop lists, which is the first thing anyone checks. In the
- * reference consumer the same refactor that emptied `arc-modal`'s props also
- * took `onArcClose` and `onArcOpen` with them.
+ * that recovered its props but not its event handlers passes every comparison
+ * of prop lists, which is the first thing anyone checks.
  *
- * ── The rule ──
- *
- * Events and per-property facts are always merged, because neither is rendering:
- * a subclass dispatches its own events *and* its parent's, and `super()` runs
- * the parent's constructor whatever the subclass draws. Everything about
- * rendering — template, styles, slots, classification — is inherited only when
- * the subclass renders nothing of its own, which is the one signal that
- * separates "extends and overrides" from "extends and adds nothing". A subclass
- * with its own `render()` is describing its own surface and is believed about it.
- *
- * Either way the subclass wins where it spoke. Taking a fact is always filling a
- * hole, never overruling an answer.
- *
- * ── Provenance ──
- *
- * Worth stating plainly, because the version of this story that reached the
- * changelog first was wrong. The `arc-modal` regression was not longstanding:
- * the component had ordinary `static properties` and shipped correct wrappers
- * for every released version, and the props vanished in the single refactor
- * commit that reduced it to a subclass. That is the sharper fact. **A source
- * reader silently empties a component the moment an ordinary, correct refactor
- * turns it into a subclass** — no wrapper edited, no generator edited, and the
- * only signal a handful of findings that read as stale documentation.
+ * The rule: events and per-property facts merge unconditionally, because
+ * neither is rendering — a subclass dispatches its parent's events too, and
+ * `super()` runs the parent's constructor whatever the subclass draws.
+ * Template, styles, slots and classification transfer only when the subclass
+ * renders nothing of its own; a subclass with its own `render()` is describing
+ * its own surface and is believed about it. Either way the subclass wins where
+ * it spoke: inheriting fills holes, never overrules answers.
  */
 
 /**
@@ -57,10 +33,9 @@
 export function inheritFrom(meta, ancestor) {
   const inherited = [];
 
-  // Events first, and unconditionally. A subclass that renders its own template
-  // still dispatches whatever its base dispatches, so this is a union rather
-  // than a fallback — and the duplicate-free order keeps the subclass's own
-  // events first, which is the order its wrapper already declared them in.
+  // A union, not a fallback: a subclass with its own template still dispatches
+  // its base's events. The subclass's own events stay first — the order its
+  // wrapper already declares them in.
   const ownEvents = new Set(meta.events);
   const addedEvents = ancestor.events.filter((e) => !ownEvents.has(e));
   if (addedEvents.length > 0) {
@@ -68,29 +43,22 @@ export function inheritFrom(meta, ancestor) {
     inherited.push(`events (${addedEvents.join(', ')})`);
   }
 
-  // Payloads merge whether or not any *name* was new, and that is not a detail.
-  // A subclass can know the names from its own `@fires` tags and still know
-  // nothing about what they carry, because a tag states no payload — so the
-  // names would look complete while every two-way binding derived from them
-  // silently disappeared. Only the ancestor's dispatch sites have the keys.
+  // Payloads merge even when no event *name* was new: a subclass can know the
+  // names from its own `@fires` tags while only the ancestor's dispatch sites
+  // have the detail keys — and the keys are what two-way bindings derive from.
   const ownDetails = Object.keys(meta.eventDetails ?? {}).length;
   meta.eventDetails = { ...ancestor.eventDetails, ...meta.eventDetails };
   if (Object.keys(meta.eventDetails).length > ownDetails && addedEvents.length === 0) {
     inherited.push('event payloads');
   }
 
-  // Per-property facts, and also unconditionally. `elementProperties` carries
-  // what a property *is* — its type, whether it reflects, which attribute it
-  // binds — because that is the declaration Lit flattened. It carries nothing
-  // about what the author said or did around it: the default is an assignment
-  // in the base class's constructor, and the union and the verbatim TS type are
-  // words in a `@prop` tag above it. An empty subclass has no constructor and no
-  // tags, so all three come back empty.
-  //
-  // Unconditional because a constructor is not rendering. `super()` runs whatever
-  // the base assigns no matter what the subclass renders, so a subclass with its
-  // own `render()` still has its parent's defaults — and if it assigns its own,
-  // the source reader already found them and `own wins` leaves them alone.
+  // Per-property facts, also unconditionally. `elementProperties` carries what
+  // a property *is*; the default, the union and the verbatim TS type live in
+  // the base class's constructor and JSDoc, which an empty subclass has none
+  // of. Unconditional because a constructor is not rendering: `super()` runs
+  // whatever the base assigns no matter what the subclass renders — and where
+  // the subclass assigns its own, the source reader already found it and the
+  // checks below leave it alone.
   const ancestorProps = new Map((ancestor.props ?? []).map((p) => [p.name, p]));
   const gainedDefault = [];
   const gainedType = [];
@@ -101,10 +69,8 @@ export function inheritFrom(meta, ancestor) {
       prop.default = base.default;
       gainedDefault.push(prop.name);
     }
-    // A union is the difference between `size: string` and `size: 'sm'|'md'|'lg'`
-    // in six sets of types, so losing it costs the subclass its type safety
-    // rather than a value. Both spellings travel together because both are read
-    // from the same tag.
+    // A lost union degrades `size: 'sm'|'md'|'lg'` to `string` in six sets of
+    // types. Union and docType travel together — both come from the same tag.
     if ((prop.values?.length ?? 0) === 0 && (base.values?.length ?? 0) > 0) {
       prop.values = [...base.values];
       gainedType.push(prop.name);

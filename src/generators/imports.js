@@ -1,12 +1,8 @@
 /**
- * The module specifier a wrapper imports to register its element.
- *
- * Every generator needs it and all six computed it inline, from the same two
- * config fields, in slightly different ways. That mattered once it stopped
- * being only a generator concern: `verify.js` has to name the same specifier to
- * check the import is still there, and a check that derives the string
- * independently is a check that can agree with itself while disagreeing with
- * what was written.
+ * The module specifier a wrapper imports to register its element. Shared
+ * because `verify.js` has to name the same specifier to check the import is
+ * still there — a check that derives it independently can agree with itself
+ * while disagreeing with what was written.
  *
  * @param {import('../parser.js').ComponentMeta} meta
  * @param {object} config - a framework config section (carries `prefix`, and

@@ -9,23 +9,14 @@
 /**
  * Whether a wrapper should accept children.
  *
- * A component with no default `<slot>` has nowhere to put them: `arc-confirm`
- * declared `children` and rendered them into an element that discards them, so
- * content passed there vanished silently. Omitting the member makes it a type
- * error instead.
- *
- * The rule is deliberately asymmetric, because the two ways of being wrong are
- * not remotely equal. Keeping children a component can't use is a no-op you
- * discover by reading. Dropping children a component *can* use deletes rendered
- * content — which is exactly what 2.7.0 did to 111 components, because it read
- * "no default slot found" as "no default slot exists". Those are different
- * claims, and only the second one justifies removing anything.
- *
- * So children are dropped only on positive evidence: either slots were found
- * and none of them was the default, or the author wrote `@slot none`. Finding
- * no slots at all is not evidence a component has none — it is equally
- * consistent with having failed to look in the right place — so that case keeps
- * children until someone annotates it.
+ * A component with no default `<slot>` has nowhere to put them, and omitting
+ * the member turns silently vanishing content into a type error. The rule is
+ * deliberately asymmetric because the two ways of being wrong are not equal:
+ * keeping children a component can't use is a no-op found by reading, dropping
+ * children it *can* use deletes rendered content. So children are dropped only
+ * on positive evidence — slots were found and none was the default, or the
+ * author wrote `@slot none`. Finding no slots at all is equally consistent
+ * with having failed to look in the right place, so that case keeps children.
  *
  * @param {import('../parser.js').ComponentMeta} meta
  * @returns {boolean}
@@ -48,23 +39,18 @@ export function acceptsChildren(meta) {
 }
 
 /**
- * Whether a wrapper must carry children at all — the broader question, and the
- * one four of the six frameworks actually need answered.
+ * Whether a wrapper must carry children at all — the question React, Preact,
+ * Solid and Angular need answered.
  *
- * `acceptsChildren` asks whether there is a *default* slot for unlabelled
- * content. React, Preact, Solid and Angular don't get to ask only that: they
- * put children into the host's light DOM verbatim and let the browser assign
- * them from their own `slot` attribute, so their single children outlet is the
- * route for named-slot content too. Gating it on the default slot deleted every
- * child from the wrappers of the 10 arc-ui components that declare only named
- * slots — `<arc-top-bar>` has four of them and its Angular template was empty.
- *
- * Vue and Svelte interpose their own slot handling and emit an outlet per named
- * slot, so their default outlet stays on `acceptsChildren`. That difference is
- * why this is a second predicate rather than a change to the first one.
+ * Those four put children into the host's light DOM verbatim and let the
+ * browser assign them from the `slot` attribute, so their single children
+ * outlet is also the route for named-slot content — gating it on the default
+ * slot deletes every child from a component whose slots are all named. Vue and
+ * Svelte emit an outlet per named slot, so their default outlet stays on
+ * `acceptsChildren`; that difference is why this is a second predicate.
  *
  * `meta.slots` rather than `slotsInMarkup`, matching the named outlets Vue and
- * Svelte already emit: a slot known only from a `@slot` tag still needs a route.
+ * Svelte emit: a slot known only from a `@slot` tag still needs a route.
  *
  * @param {import('../parser.js').ComponentMeta} meta
  * @returns {boolean}
@@ -75,22 +61,9 @@ export function projectsChildren(meta) {
 }
 
 /**
- * Map a WC property type to a TypeScript type string.
- *
- * Precedence, most authoritative first:
- *   1. a documented `@prop {…}` type — the author said what the shape is
- *   2. a detected enum union — from the docs, or inferred from CSS
- *   3. the `static properties` type, which can only say "an Array of something"
- *
- * @param {import('../parser.js').PropMeta} prop
- * @returns {string}
- */
-/**
  * Global HTML attributes a consumer may reasonably pass through to the element.
- *
- * Value types are deliberately loose — the point of listing them is to accept
- * the *name*, not to validate the value. What's being bought here is that an
- * unlisted name is now an error.
+ * Value types are deliberately loose — the point is to accept the *name*, so
+ * that an unlisted name is an error.
  */
 const GLOBAL_ATTRS = [
   ['class', 'string'],
@@ -120,17 +93,12 @@ const GLOBAL_ATTRS = [
 /**
  * The escape-hatch members of a generated Props interface.
  *
- * A blanket `[key: string]: unknown` is what makes `...rest` type-check, but it
- * also accepts every misspelling: `<Slider valu={3} />` passed clean, which
- * defeats most of what these types are for. Pattern index signatures keep the
- * spread working while restoring excess-property checking on everything else.
- *
- * The `on${string}` signature is not optional — Svelte consumers reach custom
- * events through `onarc-input` on the spread, so narrowing without it would
- * break the two-way-binding escape hatch.
- *
- * Names the component already declares are omitted: repeating one would be a
- * duplicate interface key, which is a hard TS error.
+ * A blanket `[key: string]: unknown` makes `...rest` type-check but accepts
+ * every misspelling (`<Slider valu={3} />` passed clean); pattern index
+ * signatures keep the spread working while restoring excess-property checking.
+ * The `on${string}` signature is required — Svelte consumers reach custom
+ * events through `onarc-input` on the spread. Names the component already
+ * declares are omitted, since repeating one is a hard TS error.
  *
  * @param {import('../parser.js').PropMeta[]} props
  * @param {string} indent
@@ -150,6 +118,14 @@ export function passthroughMembers(props, indent = '  ', alsoDeclared = []) {
   return lines;
 }
 
+/**
+ * Map a WC property type to a TypeScript type string. Precedence: a documented
+ * `@prop {…}` type, then a detected enum union, then the `static properties`
+ * type — which can only say "an Array of something".
+ *
+ * @param {import('../parser.js').PropMeta} prop
+ * @returns {string}
+ */
 export function tsType(prop) {
   if (prop.docType) return prop.docType;
   if (prop.values && prop.values.length > 0) {
@@ -166,27 +142,20 @@ export function tsType(prop) {
 
 /**
  * A wrapper default must be a value the prop's declared type admits, or
- * nothing. The source default is documentation text, and two shapes of it
- * used to reach wrappers verbatim and only failed once the packages grew a
- * compile step: a Number prop documented as '0' (string literal against a
- * number type) and a union prop whose neutral default ('') isn't a union
- * member. The element itself always carries the real default, so omitting an
- * unrepresentable one changes nothing at runtime.
- *
- * `arrayFactory` wraps array/object defaults in `() => (…)` for frameworks
- * that require fresh references per instance (Vue's withDefaults).
+ * nothing — a string '0' against a number type, or a neutral '' that isn't a
+ * union member, fails the wrapper package's own build. The element always
+ * carries the real default, so omitting an unrepresentable one changes nothing
+ * at runtime. `arrayFactory` wraps array/object defaults in `() => (…)` for
+ * frameworks that need fresh references per instance (Vue's withDefaults).
  */
 export function typedDefault(prop, { arrayFactory = false } = {}) {
   if (!prop.default) return undefined;
   const val = prop.default;
-  // `this.format = undefined` and `this.contained = null` are the *absence* of
-  // a value, but they arrive here as the truthy source strings 'undefined' and
-  // 'null'. Every earlier branch is keyed on a declared type or a quote, so
-  // both used to fall through to the quote-it fallback and reach wrappers as
-  // the string 'undefined' / 'null' — truthy, and in Vue a string default
-  // against a Function-typed prop, which fails the package's own build. The
-  // element sets its own null/undefined on upgrade, so emitting nothing here
-  // is what actually preserves the author's default.
+  // `this.format = undefined` is the *absence* of a value but arrives as the
+  // truthy source string 'undefined'; without this it falls through to the
+  // quote-it fallback and reaches wrappers as a literal string. The element
+  // sets its own null/undefined on upgrade, so emitting nothing preserves the
+  // author's default.
   if (val === 'undefined' || val === 'null') return undefined;
   const unquoted = val.replace(/^['"]|['"]$/g, '');
   if (prop.type === 'Number') {

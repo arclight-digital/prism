@@ -32,20 +32,12 @@ export function safeIdent(name, taken = new Set()) {
 
 /**
  * Props whose name changes under lowercasing, and so cannot travel as an
- * attribute at all.
- *
- * HTML attribute names are case-insensitive and get lowercased on the way into
- * the DOM, so `confirmLabel` is written as `confirmlabel` — which is not the
- * attribute Lit observes, so the element keeps its constructor default and
- * nothing warns. Measured on `arc-confirm`: `confirmLabel="Delete"` produced
- * `confirmlabel="Delete"` in the DOM with `el.confirmLabel === 'Confirm'`.
- * All-lowercase props are unaffected — `open` and `heading` arrive intact.
- *
- * Emitting kebab-case instead would be worse, not better: Lit's Boolean
- * converter is presence-based, so `auto-resize="false"` sets `autoResize` to
- * *true*. That turns a silent no-op into a silently inverted value on every
- * boolean a consumer explicitly sets to false. The fix is to set the property
- * and never involve an attribute name.
+ * attribute at all: `confirmLabel` reaches the DOM as `confirmlabel`, which is
+ * not the attribute Lit observes, so the element keeps its constructor default
+ * and nothing warns. Emitting kebab-case instead would be worse — Lit's
+ * Boolean converter is presence-based, so `auto-resize="false"` sets
+ * `autoResize` to *true*. The fix is to set the property and never involve an
+ * attribute name.
  *
  * @param {import('../parser.js').PropMeta[]} props
  * @returns {import('../parser.js').PropMeta[]}
@@ -57,12 +49,11 @@ export function mixedCaseProps(props) {
 /**
  * Map each named slot to the identifier its snippet prop binds to.
  *
- * Slot names are HTML, snippet props are identifiers, and the two grammars don't
- * agree: `slot="icon-left"` is perfectly legal markup and cannot be a binding
- * name, so it becomes `iconLeft`. That has a consequence worth knowing — Svelte
- * derives the prop name from the `slot` attribute verbatim, so the legacy
- * `<x slot="icon-left">` form can't reach a prop called `iconLeft`; only the
- * `{#snippet iconLeft()}` form can.
+ * Slot names are HTML, snippet props are identifiers: `slot="icon-left"` is
+ * legal markup but not a binding name, so it becomes `iconLeft`. Consequence:
+ * Svelte derives the prop name from the `slot` attribute verbatim, so the
+ * legacy `<x slot="icon-left">` form can't reach the renamed prop — only
+ * `{#snippet iconLeft()}` can.
  *
  * @param {string[]} slots
  * @param {import('../parser.js').PropMeta[]} props
@@ -87,25 +78,17 @@ export function slotSnippetNames(slots, props) {
 /**
  * Prop names each framework takes for itself.
  *
- * A different failure mode from the JS reserved words above, and a worse one.
- * `for` is illegal syntax and fails at build; these are legal everywhere and
- * fail at runtime, silently. React and Preact strip `key` and `ref` in the
- * reconciler, so `<Column key="name" />` sets the list key and the component
- * never receives the prop — no syntax error, no type error, no warning, just a
- * column with no field to read. `key=` is also exactly what a developer writes
- * by reflex on a component that renders in a list, so the collision is close to
- * certain rather than hypothetical.
- *
- * Prism cannot fix this in the wrapper: the value is taken before the component
- * function is called, so no generated code can recover it. All prism can do is
- * report it — and report it as an alias, not a rename. The prop works today in
- * HTML and in every framework absent from this list, so renaming it would break
- * the working consumers to fix the broken ones. A second name the component
- * falls back to (`col.field ?? col.key`) breaks nobody.
+ * A worse failure mode than the JS reserved words above: `for` fails at build,
+ * these are legal everywhere and fail at runtime, silently. React and Preact
+ * strip `key` and `ref` in the reconciler, so `<Column key="name" />` sets the
+ * list key and the component never receives the prop. Prism cannot fix this in
+ * the wrapper — the value is taken before the component function runs — so it
+ * reports the collision, recommending an alias over a rename: the prop works
+ * everywhere else, and a fallback name (`col.field ?? col.key`) breaks nobody.
  *
  * The `children` entries are a different mechanism with the same cause — those
- * generators inject their own `children` member, so a prop of that name
- * collides with it. `className` is React's own always-added prop.
+ * generators inject their own `children` member. `className` is React's own
+ * always-added prop.
  */
 export const FRAMEWORK_RESERVED = {
   react: ['key', 'ref', 'children', 'className', 'dangerouslySetInnerHTML'],

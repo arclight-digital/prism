@@ -1,29 +1,18 @@
 /**
  * Checks made *before* anything is written.
  *
- * `verify.js` is the other half of this: it reads output back after a run and
- * asks whether the file came out the way the component says it should. That is
- * the right shape for a generator bug, where the damage is a file that is wrong
- * and can be regenerated correctly. It is the wrong shape for exactly one
- * failure, and it is the most destructive one prism has:
+ * `verify.js` reads output back after a run — the right shape for a generator
+ * bug, where a wrong file can be regenerated correctly. It is the wrong shape
+ * for the most destructive failure prism has: **an older prism does not error,
+ * it reverts.** Prism rewrites every file it owns from whatever version is
+ * installed, so regenerating over a newer version's output silently undoes it,
+ * and the only signal is a large diff in generated files nobody reads.
  *
- * **An older prism does not error — it reverts.** Prism rewrites every wrapper
- * it owns from whatever version is installed, so running 2.12.0 against output
- * written by 2.13.1 silently undid 205 Angular, 10 React, 10 Preact and 10 Solid
- * files. Nothing failed. The only signal was a large diff in generated files
- * nobody reads, which CI reported as "generated files are out of date" — wording
- * that reads as *stale committed output* and invites the exact wrong fix: commit
- * the revert.
- *
- * Stamping the version into each file (see header.js) makes that visible in a
- * diff, and the per-file check in the CLI reports it — but only while doing it.
- * By the time a generator has read a file's stamp it has already decided to
- * overwrite it, so the report is a witness rather than a guard, and it clears
- * itself on the next run because the files then carry the older stamp.
- *
- * So the same stamp is read here first, across the whole output tree, before a
- * single file is written. Under `--strict` that turns a revert already committed
- * into a run that refuses to start.
+ * The version stamp (see header.js) makes that visible, and the CLI's per-file
+ * check reports it — but only while overwriting, and the finding clears itself
+ * on the next run once the files carry the older stamp. So the same stamp is
+ * read here first, across the whole output tree, before a single write. Under
+ * `--strict` that turns a revert into a run that refuses to start.
  */
 
 import { openSync, readSync, closeSync, readdirSync, existsSync, statSync } from 'node:fs';
@@ -32,10 +21,9 @@ import { join } from 'node:path';
 import { VERSION, isPrismGenerated, generatedVersion, compareVersions } from './generators/header.js';
 
 /**
- * How much of each file to read. The sentinel always lives in the opening
- * comment, and this is the same window `isPrismGenerated` inspects — reading
- * whole files to look at their first line would make a pre-flight over a
- * 1,500-file tree cost more than the generate it precedes.
+ * How much of each file to read — the same window `isPrismGenerated` inspects.
+ * Reading whole files to look at their first line would make a pre-flight over
+ * a large tree cost more than the generate it precedes.
  */
 const HEAD_BYTES = 300;
 
@@ -117,11 +105,9 @@ export function scanForNewerOutput(config, root) {
 }
 
 /**
- * The finding for one file the run is about to revert.
- *
- * Written in the conditional — "would revert", not "has reverted" — because
- * nothing has happened yet. That is the whole difference between this and the
- * per-file check, and the reason it is worth saying twice.
+ * The finding for one file the run is about to revert. Worded in the
+ * conditional — "would revert" — because unlike the per-file check, nothing
+ * has been written yet.
  *
  * @param {{ path: string, version: string }} entry
  * @param {string} file - the path, relative to the project root
@@ -142,11 +128,9 @@ export function downgradeFinding(entry, file) {
 }
 
 /**
- * The block printed when a downgrade is found, before anything is written.
- *
- * One aggregate line rather than 235: the per-file findings carry the list (and
- * reach `--report-json`), and what someone needs at this moment is the count,
- * the two versions, and whether their working tree has been touched yet.
+ * The block printed when a downgrade is found. One aggregate rather than a line
+ * per file — the per-file findings carry the list, and what someone needs here
+ * is the count, the two versions, and whether the tree was touched yet.
  *
  * @param {ReturnType<typeof scanForNewerOutput>} scan
  * @param {boolean} aborting - whether the run is stopping here

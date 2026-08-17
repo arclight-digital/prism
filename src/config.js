@@ -105,16 +105,10 @@ export function normalizeConfig(config) {
     }
   }
 
-  // Accepted findings. Some findings are correct and stay correct: `arc-column`
-  // really does declare `key`, React really does eat it, and the right fix is an
-  // alias that leaves `key` working for the five consumers it works for today.
-  // Doing that leaves the finding permanently true, so without a way to record
-  // "known, decided, not going to change", `--strict` could never pass on the
-  // repos it was built for — and by its own rationale, a check that can never
-  // pass gets deleted.
-  //
-  // Validated on the same terms as `interactivity` and `bindings`: a typo here
-  // would silence nothing while looking like it had.
+  // Accepted findings. Some findings are correct and stay correct — the fix is
+  // made and the finding remains true — and without a way to record that,
+  // `--strict` could never pass. Validated like `interactivity` and `bindings`:
+  // a typo here would silence nothing while looking like it had.
   if (config.acknowledge !== undefined && !Array.isArray(config.acknowledge)) {
     throw new Error(
       'prism: config.acknowledge must be an array of { code, tag?, prop?, note? } entries'
@@ -141,11 +135,10 @@ export function normalizeConfig(config) {
       );
     }
     // An unrecognised code is ignored, not fatal. Codes are added and split
-    // between releases, so throwing here version-locks the config in both
-    // directions: a file valid for 2.7 made 2.6 refuse to start, which meant a
-    // rollback silently generated nothing and looked like the rollback hadn't
-    // helped. Being unable to bisect the generator is worse than tolerating an
-    // entry that does nothing, and `unknownCodes` keeps it visible.
+    // between releases, and throwing here would make a config written for a
+    // newer release block a rollback — being unable to bisect the generator is
+    // worse than tolerating an entry that does nothing. `unknownCodes` keeps
+    // the drop visible.
     if (!ACKNOWLEDGEABLE_CODES.includes(entry.code)) {
       unknownCodes.push(entry.code);
     }
@@ -157,10 +150,9 @@ export function normalizeConfig(config) {
         throw new Error(`prism: config.acknowledge[${i}].${field} must be a string`);
       }
     }
-    // A narrowing field the finding never carries can never match, and the only
-    // feedback would be `unmatched-acknowledge` blaming the finding for being
-    // gone while it is still live. Said here instead, at the moment the entry is
-    // written.
+    // A narrowing field the finding never carries can never match; said here,
+    // at the moment the entry is written, rather than later as a misleading
+    // `unmatched-acknowledge`.
     const unmatchable = unmatchableAckField(entry);
     if (unmatchable) {
       throw new Error(`prism: config.acknowledge[${i}] — ${unmatchable}`);
@@ -173,37 +165,29 @@ export function normalizeConfig(config) {
   config.acknowledge = config.acknowledge
     .filter((e) => ACKNOWLEDGEABLE_CODES.includes(e.code));
 
-  // Property resolver hook. Prism's own reader only understands object
-  // literals and decorators, and a repo whose declarations are built by
-  // helpers (`selected: int({ min: 0 })`) would otherwise need prism to learn
-  // its vocabulary. Validated as a function here rather than at call time: a
-  // misspelt or misplaced entry that silently did nothing would drop every
-  // built prop from every wrapper, which is the failure this exists to fix.
+  // Property resolver hook, for declarations built by helpers prism's reader
+  // can't follow. Validated here rather than at call time: an entry that
+  // silently did nothing would drop every built prop from every wrapper —
+  // the failure the hook exists to fix.
   if (config.propsFrom !== undefined && typeof config.propsFrom !== 'function') {
     throw new Error(
       'prism: config.propsFrom must be a function (source, filePath) returning an array of props, or undefined to fall through to prism\'s own reader'
     );
   }
 
-  // Form-association resolver hook. Prism reads `static formAssociated = true`
-  // from the component's own source; a library that contributes it from a mixin
-  // — `class ArcInput extends FormControlMixin(LitElement)` — keeps the fact in
-  // a file prism was never handed. Same shape and same reasoning as propsFrom.
+  // Form-association resolver hook, for libraries that contribute
+  // `static formAssociated = true` from a mixin in a file prism was never
+  // handed. Same shape and reasoning as propsFrom.
   if (config.formAssociated !== undefined && typeof config.formAssociated !== 'function') {
     throw new Error(
       'prism: config.formAssociated must be a function (source, filePath) returning true, false, or undefined to fall through to prism\'s own reader'
     );
   }
 
-  // Which property a form binds on a given component. Needed only where the
-  // convention doesn't answer: a control whose value is a *pair* (a date range
-  // is start/end, a range slider is low/high) has no single `value` for a
-  // ControlValueAccessor to carry, and without an entry here it would be the one
-  // control in the catalog where `formControlName` silently does nothing.
-  //
-  // Validated on the same terms as `interactivity` and `bindings`: a typo here
-  // would leave the convention in place while looking like it had been
-  // overridden, which is worse than no override at all.
+  // Which property a form binds on a given component — needed only where the
+  // convention doesn't answer, e.g. a control whose value is a pair (start/end)
+  // with no single `value` for an accessor to carry. Validated like the other
+  // maps: a typo would leave the convention in place while looking overridden.
   if (config.formValue !== undefined
       && (typeof config.formValue !== 'object' || config.formValue === null
           || Array.isArray(config.formValue))) {
@@ -226,12 +210,10 @@ export function normalizeConfig(config) {
   config.ignore = config.ignore || [];
   config.tiers = config.tiers || [];
 
-  // Resolve properties from the class rather than from the file that declares
-  // it. Opt-in, and deliberately so: reading `Ctor.elementProperties` means
-  // importing the module, and importing a module runs it. Prism has never
-  // executed a line of a consumer's code, and turning that on by default would
-  // be a change of kind rather than degree — a config file is the right place to
-  // say yes to it.
+  // Resolve properties from the class rather than the file that declares it.
+  // Deliberately opt-in: reading `Ctor.elementProperties` means importing the
+  // module, and importing a module runs it — a config file is the right place
+  // to say yes to that.
   if (config.runtime !== undefined) {
     if (config.runtime === true) config.runtime = {};
     if (config.runtime === false) {
@@ -269,20 +251,13 @@ export function normalizeConfig(config) {
     }
     config.jsxTypes.prefix = config.prefix;
 
-    // The package name in the activation instructions these files carry.
-    //
-    // It used to fall back to the `@{prefix}/{prefix}-ui` convention, silently,
-    // and that is a worse failure here than anywhere else prism uses that
-    // default: the generated header tells a consumer to add
-    // `node_modules/<pkg>/types/react-jsx.d.ts` to their tsconfig, and a guessed
-    // package name is a path that resolves to nothing, includes nothing, and
-    // reports nothing — which is *precisely* the silent no-op the rest of that
-    // same header warns about at length. A file explaining a trap while setting
-    // one is not a file to ship.
-    //
-    // So it is inherited from the wrapper sections, which already name the
-    // package their imports come from, and is only demanded when inheriting
-    // would be a guess: when they disagree, or when there are none.
+    // The package name in the activation instructions these files carry. Never
+    // guessed from the `@{prefix}/{prefix}-ui` convention: the header tells a
+    // consumer to include `node_modules/<pkg>/types/react-jsx.d.ts`, and a
+    // guessed name is a path that resolves to nothing, includes nothing, and
+    // reports nothing — the exact silent no-op the header itself warns about.
+    // Inherited from the wrapper sections instead, and demanded explicitly
+    // when inheriting would be a guess: they disagree, or there are none.
     if (config.jsxTypes.wcPackage === undefined) {
       const named = new Set(
         FRAMEWORK_SECTIONS
@@ -306,11 +281,10 @@ export function normalizeConfig(config) {
     if (typeof section.packageJson !== 'string' || section.packageJson.length === 0) {
       throw new Error(`prism: config.${key}.packageJson must be a path to that package's package.json`);
     }
-    // Refused rather than written wrong. ng-packagr produces the published
-    // manifest for an Angular library and copies anything in the source one
-    // verbatim into dist, so an `exports` map written here ships broken — the
-    // failure lands on a consumer's build, several steps from the config that
-    // caused it.
+    // Refused rather than written wrong: ng-packagr produces the published
+    // manifest for an Angular library and copies the source one verbatim into
+    // dist, so an `exports` map written here ships broken — and the failure
+    // lands on a consumer's build, far from the config that caused it.
     if (key === 'angular') {
       throw new Error(
         'prism: config.angular.packageJson is not supported — ng-packagr owns the published package.json for an Angular library (Angular Package Format), and an exports map written into the source manifest is copied into dist and ships broken'

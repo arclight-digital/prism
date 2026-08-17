@@ -2,14 +2,10 @@
  * Visibility into what a run *didn't* produce.
  *
  * Generators are quiet about absence: an `interactive` component is skipped
- * with a one-line note buried among hundreds, and nothing ever states the
- * aggregate. That silence hid a real bug for two releases — `arc-button` gained
- * a `@click` form-submit bridge, auto-detection flipped it to `interactive`,
- * and the CSS package shipped with no button styles at all. A stale
- * `button.css` from before the reclassification masked it; once that fossil was
- * pruned the only remaining signal was silence.
+ * with one line among hundreds, and nothing states the aggregate — which is
+ * how a misclassified button once shipped a CSS package with no button styles
+ * and the only signal was silence.
  *
- * Two reports close that gap:
  *   - `outputSummary`  — how much is being skipped, stated plainly every run
  *   - `misclassified`  — which skipped components look like they shouldn't be
  */
@@ -21,9 +17,8 @@ export function outputSummary(metas) {
     total: metas.length,
     skipped: skipped.length,
     emitting: metas.length - skipped.length,
-    // Bytes of authored component CSS that reach no output. The headline
-    // number — "106 components skipped" reads as routine, "210 KB of CSS
-    // reaches nothing" does not.
+    // Bytes of authored CSS reaching no output — "106 components skipped"
+    // reads as routine, "210 KB of CSS reaches nothing" does not.
     skippedCSSBytes: skipped.reduce((n, m) => n + (m.css?.length ?? 0), 0),
   };
 }
@@ -72,74 +67,48 @@ export function formatBytes(n) {
 }
 
 /**
- * Diagnostics that should fail a `--strict` run, in the order they're reported.
+ * Diagnostics that fail a `--strict` run, in the order they're reported.
  *
- * Every one of these is a statement that prism found something it could not act
- * on: a documented union the CSS contradicts, an override pointing at a
- * component that no longer exists, a name it had to drop. On a normal run they
- * print; under `--strict` they also set the exit code, which is the only signal
- * a caller that discards stdout on success can actually observe.
+ * On a normal run these print; under `--strict` they also set the exit code —
+ * the only signal a caller that discards stdout on success can observe.
  *
  * Deliberately not included: skipped `interactive` components and the
- * misclassification list. Both are routine on every run — failing on them would
- * mean `--strict` never passes, and a check that never passes gets removed.
- *
- * Absent from this list, but able to fail a run anyway: `doc-prop-undeclared`.
- * It was excluded for two releases because the population it found was one the
- * consumer did not create and could not clear — prism read a component's own
- * source, so a prop contributed by a mixin was invisible to it, and the
- * reference consumer had 18 findings, 16 from a single form-control mixin.
- * Failing a build on a backlog only prism could clear is how a major upgrade
- * teaches people to pin.
- *
- * The fix was the cause rather than the rule. With `config.runtime` on, prism
- * reads `Ctor.elementProperties` — the flattened property map Lit builds from
- * the class, mixins included — and the finding changes meaning: not "no
- * declaration in this file", which a mixin makes routinely untrue, but "no such
- * property", which is a stale tag and a one-line fix. So it fails when it was
- * checked against the class and reports when it was read from source. See
+ * misclassification list. Both are routine on every run, and a check that
+ * never passes gets removed. `doc-prop-undeclared` is absent but can fail a
+ * run anyway: read from source, "no declaration in this file" is routinely
+ * untrue for mixin-contributed props; checked against the class it means "no
+ * such property", which is a stale tag. It fails only in the second case — see
  * `strictFailures`.
  *
  * @param {import('./parser.js').Diagnostic[]} diagnostics
  */
 export const STRICT_CODES = [
-  // First because it is the most consequential thing prism can find: a prop it
-  // cannot read is a prop absent from every wrapper, and fewer props still
-  // typechecks, so nothing downstream notices. Precise by construction — it
-  // fires only where prism genuinely could not read a declaration — so the
-  // build it turns red belonged to someone already losing props in silence.
+  // Most consequential first: a prop prism cannot read is absent from every
+  // wrapper, and fewer props still typechecks, so nothing downstream notices.
   'unparsed-prop-declaration',
   'invalid-props-from',
   'props-from-under-reports',
   'invalid-form-associated',
-  // A module `config.runtime` was meant to read but couldn't. Strict because
-  // the answer it degrades to is the one runtime resolution was turned on to
-  // replace: that component's mixin-contributed props are silently missing from
-  // every wrapper again, and nothing else would say so.
+  // A module `config.runtime` was meant to read but couldn't — that component's
+  // mixin-contributed props are silently missing again, and nothing else says so.
   'runtime-unavailable',
-  // A form control whose Angular wrapper got no ControlValueAccessor. Grouped
-  // with the prop findings because it is the same kind of loss — a binding a
-  // consumer writes, that compiles, and that does nothing at runtime.
+  // Same kind of loss as the prop findings: a binding a consumer writes, that
+  // compiles, and that does nothing at runtime.
   'form-control-unbindable',
-  // A run that rewrote output a newer prism had written. Near the top because
-  // the damage is already done by the time it prints and it is the only finding
-  // here that says so: the files have been reverted, and the single run that
-  // reports it is the last moment anyone sees the two versions side by side.
-  // It clears itself on the next run — the files now carry the older stamp — so
-  // a warning missed is a warning gone.
+  // The files have already been reverted by the time this prints, and it clears
+  // itself on the next run once they carry the older stamp — a warning missed
+  // is a warning gone.
   'generator-downgrade',
-  // Above the slot check because its failure is total rather than partial: a
-  // wrapper that registers nothing renders an inert element, so every other
-  // thing it gets right is unobservable.
+  // Above the slot check because its failure is total: a wrapper that registers
+  // nothing renders an inert element.
   'wrapper-missing-register',
   'wrapper-missing-accessor',
   'wrapper-missing-slot',
   'exports-target-missing',
   'exports-subpath-collision',
-  // A configured JSX declaration file prism declined to write because something
-  // else already owns that path. Strict, unlike the identical situation for a
-  // wrapper, because the two mean different things — see the code's label and
-  // the note in cli.js where it is raised.
+  // Strict, unlike the identical skip on a wrapper: a hand-written wrapper is a
+  // standing arrangement, a foreign file at a configured jsxTypes path is
+  // near-certainly an unfinished migration — see cli.js where it is raised.
   'jsx-types-not-written',
   'slot-name-not-identifier',
   'framework-reserved',
@@ -177,23 +146,17 @@ export const ACKNOWLEDGEABLE_CODES = [...STRICT_CODES, ...CONDITIONALLY_STRICT]
 /**
  * Which narrowing fields each acknowledgeable code actually carries.
  *
- * `acknowledge` narrows by stating fields that must match, and a field the
- * finding never sets can never match — so `{ code, tag, prop }` against a code
- * that carries no `prop` waives nothing. That would be tolerable if it were
- * visible, and it is the opposite: the entry matches nothing, so it is reported
- * as `unmatched-acknowledge` — "the issue is gone, or the entry no longer
- * describes it" — which names the one conclusion that isn't true while the
- * finding is still live and still failing the build. Two findings, both
- * misleading, from one field that was never going to match.
- *
- * `props-from-under-reports` is the case that surfaced it: it carries `props`,
- * plural, because the fault it describes is the hook's rather than any one
- * prop's, so the natural `{ code, tag, prop: 'value' }` silently did nothing.
+ * A stated field the finding never sets can never match, so the entry waives
+ * nothing and is then reported as `unmatched-acknowledge` — blaming the finding
+ * for being gone while it is still failing the build. Checking here, at config
+ * load, says so at the moment the entry is written instead.
+ * (`props-from-under-reports` is the case that surfaced this: it carries
+ * `props`, plural, so the natural `{ code, tag, prop }` silently did nothing.)
  *
  * Anything not listed narrows by `tag` alone. **Keep this in step with the
  * fields the diagnostics are constructed with** — a code that starts carrying a
- * `prop` and isn't added here rejects a legitimate entry, loudly, at config
- * load, which is the failure direction to prefer.
+ * `prop` and isn't added here rejects a legitimate entry loudly at config load,
+ * which is the failure direction to prefer.
  */
 const CARRIES_PROP = new Set([
   'unparsed-prop-declaration',
@@ -252,16 +215,13 @@ function ackMatches(entry, d) {
 }
 
 /**
- * Split diagnostics into the ones still demanding attention and the ones
- * already decided, and report acknowledgements that matched nothing.
+ * Split diagnostics into active and acknowledged, and report acknowledgements
+ * that matched nothing.
  *
- * Accepted findings are still returned rather than dropped: an allowlist that
- * makes findings vanish is how a real regression hides behind an old decision.
- * They print, quietly, under their own heading.
- *
- * A stale acknowledgement is itself a finding, for the same reason an unmatched
- * `config.interactivity` key is — the entry sits in the config looking like it's
- * doing something while the thing it described is gone.
+ * Accepted findings are returned rather than dropped — an allowlist that makes
+ * findings vanish is how a regression hides behind an old decision — and a
+ * stale acknowledgement is itself a finding, since the entry sits in the config
+ * looking like it does something while the thing it described is gone.
  *
  * @param {import('./parser.js').Diagnostic[]} diagnostics
  * @param {Array<{code: string, tag?: string, prop?: string, note?: string}>} acknowledge
@@ -299,16 +259,9 @@ export function partitionAcknowledged(diagnostics, acknowledge = []) {
 }
 
 /**
- * Diagnostics that fail this run.
- *
- * Mostly a question about the code, and for one finding a question about the
- * evidence behind it. `doc-prop-undeclared` is the same claim either way — a
- * documented `@prop` with nothing behind it — but read from source it means
- * "no declaration in this file", which a mixin makes routinely untrue, and read
- * from the class it means "no such property", which is simply a stale tag. The
- * first cannot fail a build without failing it for a backlog the consumer did
- * not create; the second is a one-line fix in the file being complained about.
- * So the finding carries `strict` when it was checked against the class.
+ * Diagnostics that fail this run: the strict codes, plus any finding carrying
+ * `strict: true` — which `doc-prop-undeclared` sets when it was checked against
+ * the class rather than read from source (see STRICT_CODES).
  *
  * @param {import('./parser.js').Diagnostic[]} diagnostics
  */

@@ -23,19 +23,11 @@ export default {
     'arc-copy-button': { exclude: ['value'] },
   },
 
-  // Resolve properties from the component class by importing it, rather than
-  // from the file that declares it. This is the only way a property contributed
-  // by a mixin or a base class is visible at all — `class ArcInput extends
-  // FormControlMixin(LitElement)` really has `readonly`, and reading input.js
-  // will never find it.
-  //
-  // Opt-in because importing a module runs it, and prism otherwise executes
-  // nothing. A module that won't import costs that one component its runtime
-  // answer, is reported, and falls back to the source reader.
-  //
-  // With this on, `propsFrom` and `formAssociated` below are both unnecessary:
-  // a helper-built declaration is an ordinary reactive property by the time the
-  // class exists, and `formAssociated` is a static on it.
+  // Resolve properties from the component class by importing it — the only way
+  // a property contributed by a mixin or a base class is visible at all.
+  // Opt-in because importing a module runs it; a module that won't import is
+  // reported and falls back to the source reader. With this on, `propsFrom`
+  // and `formAssociated` below are both unnecessary.
   runtime: true,
   // runtime: { setup: './scripts/dom-shim.js' },  // if imports need a DOM
 
@@ -56,13 +48,10 @@ export default {
   //   }));
   // },
 
-  // Whether an element is form-associated, where prism can't see it for itself.
-  // It reads `static formAssociated = true` from the component's own source; a
-  // library that contributes it from a mixin keeps the fact in a file prism was
-  // never handed. Form-associated elements are the ones whose Angular wrappers
-  // get a ControlValueAccessor, which is what makes formControlName, formControl
-  // and [(ngModel)] work — without one they bind nothing and report nothing.
-  // Omit this entirely if your components declare it themselves.
+  // Whether an element is form-associated, where a mixin declares it in a file
+  // prism was never handed. Form-associated elements are the ones whose Angular
+  // wrappers get a ControlValueAccessor. Omit this entirely if your components
+  // declare `static formAssociated = true` themselves.
   //
   // formAssociated(source) {
   //   return /FormControlMixin\(/.test(source) || undefined;
