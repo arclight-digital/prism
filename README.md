@@ -165,7 +165,22 @@ class ArcInput extends FormControlMixin(LitElement) { … }
 
 `readonly`, `required` and `name` are real reactive properties of that element, and no amount of reading `input.js` will find them. In the reference consumer that was 16 properties from one mixin, missing from all six framework wrappers of 25 form controls: settable on the element and in plain HTML, unreachable from React or Angular.
 
-Inheritance is the sharper version of the same problem. `export class ArcModal extends ArcDialog {}` — an empty subclass with no `static properties` of its own — has every property `ArcDialog` declares and *none* that source reading can attribute to it. In the same consumer that was six props reaching no wrapper in any framework, for as long as the wrapper packages had existed: `<Modal open>` did nothing, everywhere, and the only symptom was six `doc-prop-undeclared` warnings that read as though the documentation were stale.
+Inheritance is the sharper version of the same problem. `export class ArcModal extends ArcDialog {}` — an empty subclass with no `static properties` of its own — has every property `ArcDialog` declares and *none* that source reading can attribute to it.
+
+What makes it sharp is that nothing was wrong until it was. That component shipped correct wrappers for every released version; its props and both its events vanished in the single refactor commit that reduced it to a subclass. No wrapper was edited, no generator was edited, and the only signal was a handful of `doc-prop-undeclared` warnings that read as though the documentation were stale. **A source reader empties a component the moment an ordinary, correct refactor turns it into a subclass.**
+
+### What a subclass inherits
+
+`elementProperties` is flattened by Lit, so `runtime` brings the *properties* back on its own. Nothing else flattens, because nothing else is data on the class: the events a component dispatches, the slots it renders, its template and its styles are all statements in the base class's source file.
+
+Props alone coming back is the dangerous state rather than a partial one — a wrapper that has recovered its props and not its event handlers passes every comparison of prop lists, which is the first thing anyone checks. So prism links a component to the one it extends, by class identity through the prototype chain, and takes the rest from that component's own parse:
+
+- **events and their payloads** merge always, since a subclass dispatches its own *and* its parent's — and the payload matters on its own, because two-way bindings are derived from it;
+- **template, styles, slots and interactivity** transfer only when the subclass renders nothing of its own. A subclass with its own `render()` is describing its own surface and is believed about it.
+
+A run says what it took: `inherits from arc-dialog: events (arc-close, arc-open), template, slots (footer)`.
+
+This needs the base class to be one of the components prism scanned. Where it isn't — a base in another package, or a component that dispatches from a helper module — a `@fires` tag is believed instead. Dispatch sites stay authoritative because they carry the `detail` shape and a tag carries nothing, but an *absence* of dispatch sites is not evidence of absence, and the two ways of being wrong are not equal: a handler prop for an event that never fires is an unused optional member, while a missing one is a consumer's `onArcClose` that silently never runs.
 
 Lit already computes the answer. `Ctor.elementProperties` is the flattened map of every reactive property the class has, mixins and superclasses included, with the declared type, the reflect flag, the attribute name and the internal `state` marker. It cannot disagree with the component, because it *is* the component:
 

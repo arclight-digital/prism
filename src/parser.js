@@ -1480,6 +1480,34 @@ function extractEvents(source, warn, tag) {
       if (!seen.includes(key)) seen.push(key);
     }
   }
+
+  // Documented events prism found no dispatch for.
+  //
+  // Dispatch sites are the better evidence and stay authoritative — they carry
+  // the `detail` shape, which is what two-way bindings are derived from, and a
+  // `@fires` tag carries nothing. But an absence of dispatch sites is not
+  // evidence of absence: a component that dispatches from a helper module, or
+  // one whose base class prism was never pointed at, has none in its own text
+  // and fires the events anyway.
+  //
+  // The two ways of being wrong are not equal. A handler prop for an event that
+  // never fires is an unused optional member someone finds by reading. A
+  // missing handler prop is a consumer's `onArcClose` that silently never runs,
+  // which is how `arc-modal` lost both its events in a refactor that touched no
+  // wrapper and no generator. So a documented event is believed, on the same
+  // terms `@prop` types are already believed for shapes prism cannot infer.
+  for (const name of source.matchAll(/@fires\s+(?:\{[^}]*\}\s+)?([\w-]+)/g)) {
+    const event = name[1];
+    if (events.has(event)) continue;
+    if (!VALID_EVENT.test(event)) {
+      warn('invalid-event', `ignoring documented event with invalid name "${event}"`, { tag });
+      continue;
+    }
+    events.add(event);
+    // No detail keys, deliberately: the tag doesn't state a payload, and
+    // inventing one would derive a two-way binding from nothing.
+  }
+
   return { events: [...events], eventDetails };
 }
 

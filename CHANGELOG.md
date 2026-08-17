@@ -227,11 +227,15 @@ findable from inside it:
 
 - a **mixin** contributing `readonly`, `required` and `name` — missing from all
   six framework wrappers of 25 form controls;
-- a **base class**: `export class ArcModal extends ArcDialog {}`, an empty
-  subclass with no `static properties` of its own, so `open`, `heading`, `size`,
-  `fullscreen`, `dismissible` and `closable` reached no wrapper in any of the six
-  frameworks for as long as those packages have existed. `<Modal open>` did
-  nothing, everywhere;
+- a **base class**: `export class ArcModal extends ArcDialog {}`. The component
+  had ordinary `static properties` and shipped correct wrappers for every
+  released version; the props vanished in the single refactor commit that merged
+  two dialog tags and reduced this one to a subclass. Six props and both events
+  stopped reaching any of the six frameworks — `<Modal open>` did nothing,
+  everywhere — while no wrapper was edited, no generator was edited, and the only
+  signal was a handful of findings that read as stale documentation. **A source
+  reader empties a component the moment an ordinary, correct refactor turns it
+  into a subclass;**
 - a hardcoded tier list standing in for a file tree, which is the same mistake
   one level up (see the exports map above).
 
@@ -278,6 +282,25 @@ What it retires, beyond the missing props:
   mixin-built form control answers the question the same way the browser does.
 - **`unparsed-prop-declaration`.** A declaration the source reader could not read
   is no longer a prop that goes missing; the class has it either way.
+
+**And what it does not fix on its own, which took a second pass to see.**
+`elementProperties` is flattened; nothing else is. The events a component
+dispatches, the slots it renders, its template and its styles are statements in
+the base class's *file*, so a subclass got its props back and stayed missing
+everything else — a wrapper that passes any comparison of prop lists while every
+`onArcClose` a consumer wrote silently never runs. Prism now links a component to
+the one it extends by class identity through the prototype chain, and takes the
+rest from that component's own parse: events and their payloads always, since a
+subclass dispatches its parent's as well as its own; template, styles, slots and
+interactivity only where the subclass renders nothing of its own. Each run says
+what it took.
+
+Where the base class isn't among the scanned components — another package, or a
+helper module doing the dispatching — a `@fires` tag is now believed rather than
+discarded. Dispatch sites stay authoritative because they carry the `detail`
+shape that two-way bindings are derived from, and a tag carries nothing; but an
+absence of dispatch sites is not evidence of absence, and the two ways of being
+wrong are not equal.
 
 **And it finally promotes `doc-prop-undeclared`.** The finding was report-only
 for two releases because the population it found was one the consumer did not

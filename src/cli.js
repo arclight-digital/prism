@@ -36,6 +36,7 @@ import { VERSION } from './generators/header.js';
 import { formBinding } from './generators/form-control.js';
 import { scanForNewerOutput, downgradeFinding, describeDowngrade } from './preflight.js';
 import { resolveRuntimeProps } from './runtime-props.js';
+import { inheritFrom } from './inherit.js';
 import { generateJSXTypes } from './generators/jsx-types.js';
 import { generateExportsMap, EXPORTABLE } from './generators/exports-map.js';
 import {
@@ -155,14 +156,51 @@ function discoverComponents(config) {
   return _discoverComponents(config, root);
 }
 
+/**
+ * Parse one file, and fold in whatever it inherits from the component it
+ * extends.
+ *
+ * The ancestor is parsed on demand and cached, rather than the whole run being
+ * restructured into parse-everything-then-generate. There are few ancestors, a
+ * parse is cheap, and a subclass is generated correctly whether or not its base
+ * class happened to come first in the file list.
+ *
+ * `seen` breaks a chain that would otherwise recurse: JavaScript cannot express
+ * a prototype cycle, but a stale runtime record could still name one.
+ */
+const parsedCache = new Map();
+function parseWithAncestry(filePath, config, sink, seen = new Set()) {
+  if (parsedCache.has(filePath)) return parsedCache.get(filePath);
+
+  const runtime = runtimeProps.get(filePath);
+  const meta = parseComponent(
+    readFileSync(filePath, 'utf-8'), filePath, config.prefix, config.interactivity, sink,
+    { propsFrom: config.propsFrom, formAssociated: config.formAssociated, runtime }
+  );
+  if (!meta) return null;
+
+  const from = runtime?.classes?.get(meta.className)?.inheritsFrom;
+  if (from && !seen.has(filePath)) {
+    seen.add(filePath);
+    // The ancestor's own diagnostics are collected where the ancestor is
+    // processed in its own right; a throwaway sink here keeps them from being
+    // reported twice under the subclass's name.
+    const ancestor = parseWithAncestry(from.file, config, [], seen);
+    if (ancestor) {
+      const { inherited } = inheritFrom(meta, ancestor);
+      if (inherited.length > 0) {
+        console.log(`  inherits from ${ancestor.tag}: ${inherited.join(', ')}`);
+      }
+    }
+  }
+
+  parsedCache.set(filePath, meta);
+  return meta;
+}
+
 // ── Process a single component file ─────────────────────────
 function processFile(filePath, config) {
-  const source = readFileSync(filePath, 'utf-8');
-  const meta = parseComponent(source, filePath, config.prefix, config.interactivity, diagnostics, {
-    propsFrom: config.propsFrom,
-    formAssociated: config.formAssociated,
-    runtime: runtimeProps.get(filePath),
-  });
+  const meta = parseWithAncestry(filePath, config, diagnostics);
 
   if (!meta) {
     console.log(`  skip: ${relative(root, filePath)} (no component found)`);
@@ -926,7 +964,12 @@ async function main() {
 
   if (singleFile) {
     console.log(`@arclux/prism — processing ${singleFile}`);
-    await loadRuntimeProps([resolve(root, singleFile)], config);
+    // The whole set, not just the one file, when runtime resolution is on. A
+    // component's ancestry can only be resolved against classes prism has
+    // actually imported, and a subclass whose base class wasn't loaded silently
+    // loses its events and its slots — the exact failure this mode would
+    // otherwise reintroduce one file at a time.
+    await loadRuntimeProps(config.runtime ? discoverComponents(config) : [resolve(root, singleFile)], config);
     processFile(resolve(root, singleFile), config);
     warnUnknownAcknowledgeCodes(config);
     flushDiagnostics(config);
@@ -982,12 +1025,7 @@ async function main() {
       // go to a throwaway collector unless this is the full reconcile.
       const sink = sweep ? diagnostics : [];
       const metas = currentFiles
-        .map((f) => parseComponent(readFileSync(f, 'utf-8'), f, config.prefix, config.interactivity, sink,
-          {
-            propsFrom: config.propsFrom,
-            formAssociated: config.formAssociated,
-            runtime: runtimeProps.get(f),
-          }))
+        .map((f) => parseWithAncestry(f, config, sink))
         .filter(Boolean);
       if (metas.length === 0) return;
       if (config.css) {
@@ -1014,20 +1052,38 @@ async function main() {
       const fileName = filePath.split(/[/\\]/).pop();
       if (isIgnored(fileName, filePath, config.ignore)) return;
       console.log(`\n${label}: ${rel}`);
+      // Parses are cached so a base class is read once per run rather than once
+      // per subclass; in watch mode "the run" ends at every change.
+      parsedCache.clear();
       try {
         // Re-import the edited module before re-reading it. Node caches modules
         // for the life of the process, so without this the watcher would keep
         // reporting on the class as it was when it started — confidently, and
         // about a file it can no longer see. `loadModule` cache-busts by mtime.
         if (config.runtime) {
+          const previous = runtimeProps.get(filePath);
           const fresh = await resolveRuntimeProps(
             [filePath],
             { ...config.runtime, setup: undefined },
-            (code, message, extra = {}) => diagnostics.push({ code, message, ...extra })
+            (code, message, extra = {}) => diagnostics.push({ code, message, ...extra }),
+            { bust: true }
           );
           const entry = fresh.get(filePath);
-          if (entry) runtimeProps.set(filePath, entry);
-          else runtimeProps.delete(filePath);
+          if (entry) {
+            // A re-imported module resolves its own imports to the modules
+            // already cached, so its base class is a different object than the
+            // one ancestry was matched against and the fresh read finds no
+            // parent. The link doesn't change when a component's body is
+            // edited, so the known one is carried forward rather than lost —
+            // otherwise a subclass would shed its inherited events on the first
+            // keystroke of a watch session.
+            for (const [name, klass] of entry.classes) {
+              klass.inheritsFrom ??= previous?.classes?.get(name)?.inheritsFrom;
+            }
+            runtimeProps.set(filePath, entry);
+          } else {
+            runtimeProps.delete(filePath);
+          }
         }
         processFile(filePath, config);
         // Flushed per change, so an edit that introduces drift says so at the

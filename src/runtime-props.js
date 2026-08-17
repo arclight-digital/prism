@@ -184,15 +184,26 @@ function readClass(Ctor) {
  * @param {string} filePath
  * @returns {Promise<{ classes: Map<string, object> }|{ error: string }>}
  */
-async function loadModule(filePath) {
-  // Cache-busted by mtime. Node caches modules for the life of the process, so
-  // without this a watch-mode rebuild would keep reading the class as it was
-  // when the watcher started — reporting confidently on a file it can no longer
-  // see. The query is inert to everything except the module cache.
+async function loadModule(filePath, { bust = false } = {}) {
+  // Deliberately *not* cache-busted by default, and this is load-bearing rather
+  // than an omission.
+  //
+  // A query string makes Node treat the URL as a different module, but only for
+  // the import that carries it: `modal.js?v=1` still resolves its own
+  // `import './dialog.js'` to the plain, already-cached module. So a busted
+  // module's base class is a *different object* from the one registered when
+  // that base was loaded directly, ancestry stops matching by identity, and a
+  // subclass silently loses the events and slots it inherits — reintroducing
+  // the exact bug this feature exists to fix, one query string at a time.
+  //
+  // Busting is therefore only for the watcher, where a stale class is the worse
+  // of the two problems and the ancestry link is carried forward instead.
   let stamp = '';
-  try {
-    stamp = `?prism=${statSync(filePath).mtimeMs}`;
-  } catch { /* a file that vanished mid-run fails at the import below */ }
+  if (bust) {
+    try {
+      stamp = `?prism=${statSync(filePath).mtimeMs}`;
+    } catch { /* a file that vanished mid-run fails at the import below */ }
+  }
 
   let mod;
   try {
@@ -205,9 +216,55 @@ async function loadModule(filePath) {
   for (const [name, value] of Object.entries(mod)) {
     if (typeof value !== 'function') continue;
     const read = readClass(value);
-    if (read) classes.set(name, read);
+    // The constructor is kept so ancestry can be resolved across files once
+    // every module has been read — see `linkAncestry`.
+    if (read) classes.set(name, { ...read, ctor: value });
   }
   return { classes };
+}
+
+/**
+ * Record, for each component class, the nearest ancestor that is also a
+ * component in this catalog.
+ *
+ * `elementProperties` already flattens inherited *properties*, so nothing above
+ * needs this. Everything else a component declares does not flatten, because it
+ * isn't data on the class: the events it dispatches, the slots it renders, its
+ * template and its styles all live in source that belongs to the base class's
+ * file. A subclass that declares none of its own —
+ * `export class ArcModal extends ArcDialog {}` — has a source file with nothing
+ * in it, and reading that file yields a component with no events, no slots and
+ * no template.
+ *
+ * Props alone coming back is the dangerous half-fix: a wrapper missing only its
+ * event handlers passes any comparison of prop lists. So the link is recorded
+ * here, and the CLI uses it to inherit the rest from the ancestor's own parse.
+ *
+ * Identity is the constructor object itself — the same value the subclass's
+ * prototype chain points at — so this cannot be wrong about which class is
+ * which, whatever the files are named.
+ */
+function linkAncestry(resolved) {
+  const owner = new Map();
+  for (const [file, { classes }] of resolved) {
+    for (const [exportName, entry] of classes) {
+      if (!owner.has(entry.ctor)) owner.set(entry.ctor, { file, exportName });
+    }
+  }
+
+  for (const [, { classes }] of resolved) {
+    for (const entry of classes.values()) {
+      let proto = Object.getPrototypeOf(entry.ctor);
+      while (typeof proto === 'function') {
+        const found = owner.get(proto);
+        if (found) { entry.inheritsFrom = found; break; }
+        proto = Object.getPrototypeOf(proto);
+      }
+      // The constructor has done its job; dropping it keeps a live class object
+      // out of the meta the rest of the run passes around.
+      delete entry.ctor;
+    }
+  }
 }
 
 /**
@@ -221,9 +278,11 @@ async function loadModule(filePath) {
  * @param {string[]} files
  * @param {object} runtimeConfig - the normalized `config.runtime` section
  * @param {(code: string, message: string, extra?: object) => void} warn
+ * @param {{ bust?: boolean }} [opts] - re-import past Node's module cache. Only
+ *   the watcher wants this; see `loadModule` for what it costs.
  * @returns {Promise<Map<string, { classes: Map<string, object> }>>} keyed by file
  */
-export async function resolveRuntimeProps(files, runtimeConfig, warn) {
+export async function resolveRuntimeProps(files, runtimeConfig, warn, opts = {}) {
   installGlobals();
 
   // A project whose components need more of a DOM than Lit's own shim provides
@@ -249,7 +308,7 @@ export async function resolveRuntimeProps(files, runtimeConfig, warn) {
 
   const resolved = new Map();
   for (const filePath of files) {
-    const result = await loadModule(filePath);
+    const result = await loadModule(filePath, opts);
     if (result.error) {
       // One file's failure costs that file its runtime answer and nothing more.
       // The source reader is still a usable account of the component, so this
@@ -264,5 +323,7 @@ export async function resolveRuntimeProps(files, runtimeConfig, warn) {
     }
     resolved.set(filePath, result);
   }
+
+  linkAncestry(resolved);
   return resolved;
 }

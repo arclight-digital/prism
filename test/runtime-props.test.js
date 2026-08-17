@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { resolveRuntimeProps } from '../src/runtime-props.js';
 import { parseComponent } from '../src/parser.js';
 import { strictFailures } from '../src/report.js';
+import { inheritFrom } from '../src/inherit.js';
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'runtime');
 const INPUT = join(FIXTURES, 'input.js');
@@ -103,8 +104,11 @@ describe('resolveRuntimeProps', () => {
 
 describe('a subclass that declares nothing of its own', () => {
   const MODAL = join(FIXTURES, 'modal.js');
+  const DIALOG = join(FIXTURES, 'dialog.js');
   let modal;
-  beforeAll(async () => { modal = await resolveRuntimeProps([MODAL], {}, () => {}); });
+  // Both files, because ancestry is resolved against the classes prism actually
+  // imported — a base class that was never loaded cannot be linked to.
+  beforeAll(async () => { modal = await resolveRuntimeProps([DIALOG, MODAL], {}, () => {}); });
 
   it('has no props at all when read from source', () => {
     // There is no `static properties` block in the file, because there is
@@ -119,6 +123,53 @@ describe('a subclass that declares nothing of its own', () => {
   it('inherits every property of its base class when read from the class', () => {
     const props = modal.get(MODAL).classes.get('ArcModal').props.map((p) => p.name);
     expect(props).toEqual(expect.arrayContaining(['open', 'heading', 'dismissible']));
+  });
+
+  it('records which component it extends, by class identity rather than by name', () => {
+    expect(modal.get(MODAL).classes.get('ArcModal').inheritsFrom)
+      .toEqual({ file: DIALOG, exportName: 'ArcDialog' });
+  });
+
+  it('takes the events, slots and template its own file does not have', () => {
+    // The half that `elementProperties` cannot supply. Props coming back on
+    // their own is the dangerous state: a wrapper missing only its event
+    // handlers passes every comparison of prop lists, which is the first thing
+    // anyone checks — and the refactor that emptied arc-modal's props took
+    // onArcClose and onArcOpen with them.
+    const meta = parse(MODAL, { runtime: modal.get(MODAL) });
+    expect(meta.slots).toEqual([]);
+    // Its own `@fires` tags are believed, so the events survive a base class
+    // prism was never pointed at — but with no detail keys, so no two-way
+    // binding is derived from a tag that states no payload.
+    expect(meta.events).toEqual(['arc-close', 'arc-open']);
+    expect(meta.eventDetails).toEqual({});
+
+    const { inherited } = inheritFrom(meta, parse(DIALOG, { runtime: modal.get(DIALOG) }));
+
+    expect(meta.events).toEqual(['arc-close', 'arc-open']);
+    // The link supplies what the tag cannot: the payload the base dispatches.
+    expect(meta.eventDetails['arc-close']).toEqual(['open']);
+    expect(meta.slots).toEqual(['footer']);
+    expect(meta.hasDefaultSlot).toBe(true);
+    expect(meta.template).toContain('<slot');
+    // Reported as what it took, so a run says out loud that a component's
+    // surface came from somewhere other than its own file.
+    expect(inherited).toEqual(
+      expect.arrayContaining(['event payloads', 'template', 'slots (footer)', 'default slot'])
+    );
+  });
+
+  it('merges its own events with its parent’s rather than replacing them', () => {
+    const meta = parse(MODAL, { runtime: modal.get(MODAL) });
+    meta.events = ['arc-modal-only'];
+    meta.template = '<div></div>';   // renders its own, so nothing else transfers
+
+    inheritFrom(meta, parse(DIALOG, { runtime: modal.get(DIALOG) }));
+
+    expect(meta.events).toEqual(['arc-modal-only', 'arc-close', 'arc-open']);
+    // It answered for its own rendering, so it is believed about it.
+    expect(meta.slots).toEqual([]);
+    expect(meta.template).toBe('<div></div>');
   });
 
   it('stops reporting the documented props as undeclared, because they are not', () => {
