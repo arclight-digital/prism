@@ -313,7 +313,18 @@ function resolveProps(source, filePath, propsFrom, warn, tag, unparsed, runtime)
   // Note what this also retires: the source reader is what raises
   // `unparsed-prop-declaration`, and a declaration it could not read is no
   // longer a prop that goes missing — the class has it either way.
-  if (runtime) return { props: runtime.props, fromHook: false };
+  //
+  // Copied, and that is load-bearing rather than tidy. The runtime map is
+  // resolved once per run and read by every parse of the file; the props on it
+  // are then written to all the way down this function — defaults, documented
+  // unions, CSS-inferred enums, and whatever a component inherits from the class
+  // it extends. Handing out the cached objects lets one parse leave its
+  // conclusions where the next parse reads them as the class's own, which for
+  // inherited facts means an ancestor's default surviving into a component that
+  // never had one.
+  if (runtime) {
+    return { props: runtime.props.map((p) => ({ ...p, values: [...p.values] })), fromHook: false };
+  }
 
   return { props: parseProperties(source, warn, tag, unparsed), fromHook: false };
 }

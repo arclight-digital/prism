@@ -159,6 +159,61 @@ describe('a subclass that declares nothing of its own', () => {
     );
   });
 
+  it('takes the defaults and documented unions its properties arrived without', () => {
+    // One layer below events and slots, and the same shape. The class says
+    // `size` is a reflecting String, which is all a declaration is; that it
+    // starts at 'md' is an assignment in the base's constructor and that it is
+    // one of three strings is words in a `@prop` tag, and neither is on the
+    // class to be read. Svelte is where the first shows, because it is the only
+    // emitter that puts defaults in the destructuring — `heading = ''` on the
+    // base and a bare `heading` on the subclass. The union costs more quietly:
+    // `size: string` instead of `size: 'sm' | 'md' | 'lg'`, in six sets of types.
+    const meta = parse(MODAL, { runtime: modal.get(MODAL) });
+    const prop = (name) => meta.props.find((p) => p.name === name);
+    expect(prop('heading').default).toBe('');
+    expect(prop('size').values).toEqual([]);
+
+    const { inherited } = inheritFrom(meta, parse(DIALOG, { runtime: modal.get(DIALOG) }));
+
+    expect(prop('heading').default).toBe("''");
+    expect(prop('open').default).toBe('false');
+    expect(prop('size').values).toEqual(['sm', 'md', 'lg']);
+    expect(inherited).toEqual(
+      expect.arrayContaining(['defaults (open, heading, size)', 'documented types (size)'])
+    );
+  });
+
+  it('does not leave what it inherited where the next parse reads it as its own', () => {
+    // The runtime map is resolved once per run and every parse of the file reads
+    // it, so handing out its prop objects makes one parse's conclusions the
+    // next one's input. Harmless while every conclusion was re-derived from the
+    // same source, and not harmless at all once a *parent's* facts are among
+    // them: in watch mode the second rebuild would call an inherited default its
+    // own, and stop asking where it came from.
+    const first = parse(MODAL, { runtime: modal.get(MODAL) });
+    inheritFrom(first, parse(DIALOG, { runtime: modal.get(DIALOG) }));
+    expect(first.props.find((p) => p.name === 'heading').default).toBe("''");
+
+    const second = parse(MODAL, { runtime: modal.get(MODAL) });
+    expect(second.props.find((p) => p.name === 'heading').default).toBe('');
+    expect(second.props.find((p) => p.name === 'size').values).toEqual([]);
+  });
+
+  it('keeps a default it declared itself, even when it renders its own template', () => {
+    // `super()` runs the base constructor whatever the subclass draws, so this
+    // is not a rendering fact and does not stop at the template check. It is
+    // still only ever filling a hole: a subclass that assigns its own default
+    // has been read from its own source and is believed.
+    const meta = parse(MODAL, { runtime: modal.get(MODAL) });
+    meta.template = '<div></div>';
+    meta.props.find((p) => p.name === 'heading').default = "'Untitled'";
+
+    inheritFrom(meta, parse(DIALOG, { runtime: modal.get(DIALOG) }));
+
+    expect(meta.props.find((p) => p.name === 'heading').default).toBe("'Untitled'");
+    expect(meta.props.find((p) => p.name === 'size').default).toBe("'md'");
+  });
+
   it('merges its own events with its parent’s rather than replacing them', () => {
     const meta = parse(MODAL, { runtime: modal.get(MODAL) });
     meta.events = ['arc-modal-only'];

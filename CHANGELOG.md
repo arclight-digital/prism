@@ -295,6 +295,21 @@ subclass dispatches its parent's as well as its own; template, styles, slots and
 interactivity only where the subclass renders nothing of its own. Each run says
 what it took.
 
+The same gap runs one layer below the property list, and closes the same way.
+`elementProperties` carries what a property *is* — its type, whether it reflects,
+which attribute it binds — and nothing about what surrounds it: a default is an
+assignment in the base class's constructor, and a union is words in a `@prop`
+tag. So a subclass's properties arrived complete and uniformly bare. Defaults and
+documented types are now inherited too, unconditionally, because a constructor is
+not rendering — `super()` runs whatever the base assigns however the subclass
+draws. Svelte is where a lost default shows, being the only emitter that puts one
+in the destructuring; a lost union is quieter and costs more, `size: string` in
+place of `size: 'sm' | 'md' | 'lg'` across six sets of types.
+
+Inheriting is only ever filling a hole. Wherever the subclass spoke — its own
+default, its own union, its own `render()` — it is believed, and prism looks no
+further up.
+
 Where the base class isn't among the scanned components — another package, or a
 helper module doing the dispatching — a `@fires` tag is now believed rather than
 discarded. Dispatch sites stay authoritative because they carry the `detail`

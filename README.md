@@ -171,14 +171,17 @@ What makes it sharp is that nothing was wrong until it was. That component shipp
 
 ### What a subclass inherits
 
-`elementProperties` is flattened by Lit, so `runtime` brings the *properties* back on its own. Nothing else flattens, because nothing else is data on the class: the events a component dispatches, the slots it renders, its template and its styles are all statements in the base class's source file.
+`elementProperties` is flattened by Lit, so `runtime` brings the property *declarations* back on its own. Nothing else flattens, because nothing else is data on the class: the events a component dispatches, the slots it renders, its template and its styles are all statements in the base class's source file — and so is everything that surrounds a declaration without being part of it. A default is an assignment in the constructor; a union is words in a `@prop` tag.
 
 Props alone coming back is the dangerous state rather than a partial one — a wrapper that has recovered its props and not its event handlers passes every comparison of prop lists, which is the first thing anyone checks. So prism links a component to the one it extends, by class identity through the prototype chain, and takes the rest from that component's own parse:
 
 - **events and their payloads** merge always, since a subclass dispatches its own *and* its parent's — and the payload matters on its own, because two-way bindings are derived from it;
+- **defaults and documented types** merge always too, since a constructor is not rendering: `super()` runs whatever the base assigns however the subclass draws. Svelte is where a lost default shows, being the only emitter that puts one in the destructuring; a lost union is quieter and costs more, `size: string` in place of `size: 'sm' | 'md' | 'lg'` across six sets of types;
 - **template, styles, slots and interactivity** transfer only when the subclass renders nothing of its own. A subclass with its own `render()` is describing its own surface and is believed about it.
 
-A run says what it took: `inherits from arc-dialog: events (arc-close, arc-open), template, slots (footer)`.
+Inheriting is only ever filling a hole. Wherever the subclass spoke — its own default, its own union, its own `render()` — it is believed, and prism looks no further up.
+
+A run says what it took: `inherits from arc-dialog: events (arc-close, arc-open), defaults (open, heading), template, slots (footer)`.
 
 This needs the base class to be one of the components prism scanned. Where it isn't — a base in another package, or a component that dispatches from a helper module — a `@fires` tag is believed instead. Dispatch sites stay authoritative because they carry the `detail` shape and a tag carries nothing, but an *absence* of dispatch sites is not evidence of absence, and the two ways of being wrong are not equal: a handler prop for an event that never fires is an unused optional member, while a missing one is a consumer's `onArcClose` that silently never runs.
 
