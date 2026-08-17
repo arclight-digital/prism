@@ -1,5 +1,281 @@
 # Changelog
 
+## 3.0.0 — 2026-08-16
+
+> Soaking as **`3.0.0-beta.1`** against the reference consumer before release.
+> Everything below is implemented and validated there; the beta exists so a
+> 202-component catalog regenerates on it for a while before the version that
+> every other consumer upgrades into. This note goes when 3.0.0 does.
+
+Scoped from `PRISM-3.md`, filed by `arc-ui` against 2.13.1. That document is not
+a bug list — every open bug was already fixed — it is an account of **the work
+the consumer was doing that prism should be doing**: seven files, about 1,235
+lines, that existed only because of prism, four of them verification and one of
+them a 275-line post-processor that regex-rewrote prism's emitted Angular files
+because the shape it needed had no hook.
+
+This release takes that work. It also takes the one defect the same document
+found, which is breaking, and it is the release where generated output starts
+saying which version wrote it.
+
+### Breaking
+
+**The Solid `IntrinsicElements` augmentation targeted a module nothing consults.**
+Every generated Solid wrapper carried `declare module 'solid-js'`, and it did
+nothing. Under the standard Solid setup — `jsx: "preserve"`,
+`jsxImportSource: "solid-js"` — TypeScript resolves `JSX.IntrinsicElements`
+through the **`solid-js/jsx-runtime`** entry, which re-exports the namespace from
+`solid-js/types/jsx`. Augmenting the main entry declares a second, unrelated
+`JSX` namespace, and because merging into an unused namespace is not an error
+there was no diagnostic: 201 wrappers in the reference consumer carried the block
+and none of it applied. Not visible from the Solid package's own build either,
+which compiles either way — the wrapper types its props separately, and the
+intrinsic lookup only matters to someone writing the tag directly.
+
+It now emits `declare module 'solid-js/jsx-runtime'`. This is breaking because
+the block typed nothing before: a Solid consumer passing a wrong enum value to an
+`<arc-*>` tag has been compiling clean and will stop.
+
+**Angular wrapper packages gain `@angular/forms` as a peer dependency**, wherever
+any component is form-associated. See below.
+
+**New `--strict` failures.** `form-control-unbindable`,
+`props-from-under-reports`, `wrapper-missing-accessor`, `exports-target-missing`,
+`generator-downgrade` and `invalid-form-associated` all fail a strict run. A
+build that passed on 2.13.1 can fail on 3.0.0 without anything having changed in
+the components.
+
+**Every generated file's header line changed**, since it now carries a version.
+Anything matching prism's header string exactly needs to allow for it.
+
+### Added
+
+**Angular `ControlValueAccessor` for form-associated elements.** `formControlName`,
+`formControl` and `[(ngModel)]` worked on zero Angular wrappers, and did not fail
+while not working: the binding compiled, reported nothing, and left the control
+pristine and empty while the element on screen held the user's text. That is most
+of the reason an Angular wrapper package exists — an Angular team reaching for a
+component library reaches for reactive forms in the same breath.
+
+Which components get one is the platform's own definition rather than a
+heuristic: `static formAssociated = true`. The rule it replaces — "components
+that emit a change event" — swept in tabs, theme toggles, waveforms and sortable
+lists, none of which is a form control. `config.formAssociated` answers for a
+library that contributes the static from a mixin, where prism cannot see it.
+
+A form binds `checked` if the component declares it and `value` otherwise, read
+from the component rather than a table of tag names. `config.formValue` names the
+property outright, or names the *pair* for the two controls whose value is
+compound — a date range is `start`/`end`, a range slider is `low`/`high` — which
+the accessor then carries as an object. Leaving those out would have meant
+`formControlName` working on 25 of 27 controls, which is the kind of gap a
+consumer discovers rather than reads.
+
+Three details in the emitted shape each cost something to find, and are recorded
+where they are implemented: the commit listener is attached in the constructor
+because the host metadata already maps that event to the component's own
+`@Output` and cannot carry two handlers for one event; `writeValue` never calls
+back into the form, because echoing marks the control dirty on every programmatic
+`setValue`; and the reset value follows the declared type, using a union's own
+default because `''` is not a member of `'sm' | 'md' | 'lg'` and the package
+would not compile.
+
+A form control prism cannot wire — no bindable property, or no event to commit on
+— is reported as `form-control-unbindable`, and its wrapper is still generated,
+without an accessor.
+
+**`config.jsxTypes` — the declaration files for consumers who skip the wrappers.**
+Prism generates six framework wrappers and did not generate the other thing a
+framework consumer needs: types for someone rendering `<arc-input>` directly.
+`react-jsx.d.ts`, `preact-jsx.d.ts` and `solid-jsx.d.ts` are now emitted, each
+augmenting the module its framework actually resolves `JSX.IntrinsicElements`
+through, with a per-framework base attribute set — Solid's `on:`/`prop:`/`attr:`/
+`use:`/`classList`, Preact's deliberately loose `on${string}`, React's
+`className` and `tabIndex`. A documented union stays a union, so a wrong enum
+value is a compile error.
+
+Each element carries both spellings of any property whose attribute name differs,
+because Lit *lowercases* rather than kebab-cases and both spellings reach the
+element. And the generated header states how to apply the file — and the three
+ways that look right and silently do nothing, one of which shipped in the
+reference consumer's own React file for a whole release.
+
+**Wrapper package export maps.** Point a framework section at its `packageJson`
+and prism writes that package's `exports` from the tree it just generated: a
+subpath per component, `main`/`module`/`types` for the built modes, and the
+condition each toolchain resolves — `solid` at source `.tsx` so Solid's compiler
+owns the JSX, `svelte` at the shipped component, vue-tsc's `.vue.d.ts` naming.
+Source targets are checked for existence (`exports-target-missing`); dist targets
+are not, since the package build produces them later and fails loudly itself. Two
+components whose names want the same subpath are reported
+(`exports-subpath-collision`) rather than one of them quietly losing its entry.
+`config.angular.packageJson` throws — ng-packagr owns that manifest and copies
+the source one into `dist` verbatim, so anything written there ships broken.
+
+**The version is stamped into generated output.** An older prism does not error;
+it reverts. Regenerating a 235-file catalog on 2.12.0 silently undid 205 Angular,
+10 React, 10 Preact and 10 Solid files, and the only signal was a large diff that
+CI reported as "generated files are out of date" — wording that reads as stale
+committed output and invites the exact wrong fix. The header now names the
+version that wrote the file.
+
+Reporting that during the overwrite is a witness rather than a guard — by the
+time a generator has read a file's stamp it has already decided to replace it,
+and the finding clears itself on the next run because the files then carry the
+older stamp. So the same stamp is read **before anything is written**: a full run
+and a watcher's first pass scan the output tree, and under `--strict` prism
+refuses to generate at all rather than reverting first and reporting after.
+Nothing is written, the exit code is 1, and the message names both versions. The
+per-file check stays for single-file mode and incremental watch rebuilds, and a
+file the scan already named isn't reported twice.
+
+The sentinel treats the version as optional, which is the half that had to be
+right: every file written before this release carries none, and a sentinel that
+insisted on one would have classified the entire installed base as hand-edited
+and quietly stopped regenerating it. Barrels are deliberately not stamped —
+they accrue content across versions rather than being rewritten whole.
+
+**A cross-check on what `config.propsFrom` doesn't return.** Prism validates
+every entry a hook returns and had, by construction, nothing to validate about an
+entry it never returned — so a hook that under-reports was indistinguishable from
+a correct one. Two real hook bugs shipped through that gap, each silently
+removing a prop from six wrappers. The `@prop` tags are the one independent
+account of the same component prism has, so a hook that answers for a file and
+returns strictly fewer props than that file documents is now reported as
+`props-from-under-reports`, once per file, naming the missing props.
+
+What the new code buys is not detection but **attribution**: the same absence was
+already visible as `doc-prop-undeclared`, whose wording — "documents `@prop x`
+but declares no reactive property by that name" — reads as *the documentation is
+stale*, and is exactly backwards when the property is real and the hook is what
+lost it. A finding that reads as somebody else's problem gets waived. It was: on
+first contact with a real catalog this code found `readonly`, contributed by a
+form-control mixin the consumer's hook never followed and therefore missing from
+**all six framework wrappers of 25 form controls**, while the old message sat
+unread in an accepted pile. `props-from-under-reports` names the hook;
+`doc-prop-undeclared` names the tag. Only one of them sends you to the right file.
+
+**A verification pass for the accessor** (`wrapper-missing-accessor`), alongside
+the existing registration and slot-outlet checks, for the same reason those
+exist: a missing `ControlValueAccessor` is invisible from every direction that
+isn't the file itself.
+
+**An acceptance corpus** (`test/fixtures/corpus/`). Five component sources, each
+one a shape that has broken, run through every generator in one pass. Prism's
+generator tests build `meta` by hand and so can only prove the generators did as
+they were told; every serious defect prism has shipped was found downstream
+instead. CONTRIBUTING.md records both halves of the arrangement — the corpus, and
+the reference consumer as the acceptance suite a release candidate is run against
+before publishing, which is what actually catches what a five-component corpus
+cannot.
+
+**`prop.attribute`** is now parsed from a declaration's `attribute:` option, and
+defaults to Lit's own lowercasing of the property name.
+
+### Found while the reference consumer took the release
+
+Three things the first real catalog surfaced, all fixed here:
+
+**`jsxTypes.wcPackage` is inherited from the wrapper sections, not guessed.** It
+fell back to the `@{prefix}/{prefix}-ui` convention, which is a reasonable
+default everywhere else prism uses it and the wrong one here: the package name
+goes into the activation instruction the generated header carries, so a guess
+produces `node_modules/<wrong-pkg>/types/react-jsx.d.ts` — a path that resolves
+to nothing, includes nothing and reports nothing. That is *precisely* the silent
+no-op the rest of that same header warns about at length, which makes it a file
+explaining a trap while setting one. It now comes from the framework sections
+that already name the package, and is required explicitly in the two cases where
+inheriting would be a guess: when they disagree, and when none is configured.
+
+**An `acknowledge` entry naming a field its finding never carries now throws at
+config load.** `props-from-under-reports` carries `props`, plural — the fault it
+describes is the hook's rather than any one prop's — so the natural
+`{ code, tag, prop: 'value' }` matched nothing, and the only feedback was an
+`unmatched-acknowledge` finding saying "the issue is gone, or the entry no longer
+describes it": the one conclusion that isn't true, while the original is still
+live and still failing the build. Two misleading findings from one field that was
+never going to match. The same check covers the codes that describe generated
+output and so carry no `tag`. Unrecognised codes are still judged on nothing, so
+a config written for a newer release still runs.
+
+**A JSX declaration file prism was configured to write but didn't is now a
+finding**, `jsx-types-not-written`, and fails `--strict`. A consumer migrating
+off their own generator has those exact paths on disk already; prism declines to
+overwrite what it didn't write, which is correct and permanent, so the pipeline
+stays green while the pre-migration copy is what ships — indefinitely, because
+nothing will ever write over it. That is precisely how it went in the reference
+consumer, with the one-line fix already known and written down, because
+`(skipped — manual file)` was one log line among several hundred.
+
+Strict here and not for the same skip on a wrapper, because the two mean
+different things: hand-writing a wrapper is a standing arrangement (a component
+whose slots are built at runtime has to be authored by hand, and prism stepping
+around it every run is the feature), while configuring `jsxTypes` says prism
+should produce these files. The message now names the fix —
+`(skipped — not prism's; delete it to hand the file over)` — and
+`config.acknowledge` records a decision to keep your own.
+
+### `config.runtime` — resolve properties from the class
+
+The oldest item in the ledger, and the one the rest kept pointing at.
+
+Everything else in prism reads source text, which has one blind spot it cannot
+reason its way out of: **a property contributed by a mixin or a base class is not
+in the file that declares the component.**
+
+```js
+class ArcInput extends FormControlMixin(LitElement) { … }
+```
+
+`readonly`, `required` and `name` are real reactive properties of that element,
+and no amount of reading `input.js` finds them. In the reference consumer that
+was 16 properties from one mixin, missing from **all six framework wrappers of 25
+form controls** — settable on the element and in plain HTML, unreachable from
+React or Angular, and invisible for two releases because the only finding that
+saw a shadow of it read as though the documentation were stale.
+
+Lit already computes the answer. `Ctor.elementProperties` is the flattened map of
+every reactive property a class has, mixins and superclasses included, with the
+declared type, the reflect flag, the attribute name and the internal `state`
+marker — built by Lit, at the moment the class is finalized. It cannot disagree
+with the component, because it *is* the component. `config.runtime: true` reads
+it.
+
+**Opt-in, deliberately.** Reading the class means importing the module, and
+importing a module runs it. Prism has never executed a line of a consumer's code,
+and turning that on silently would be a change of kind rather than degree. It
+also degrades rather than fails: a module that throws on import costs that one
+component its runtime answer, is reported as `runtime-unavailable`, and falls
+back to the source reader. `config.runtime.setup` points at a module that
+installs whatever DOM your components need at import time — Lit 3 carries its
+own shim and needs none.
+
+What it retires, beyond the missing props:
+
+- **`config.propsFrom`.** A declaration built by a helper — `size: oneOf([…])` —
+  is an ordinary reactive property by the time the class exists, so there is
+  nothing left for a hook to explain. Where a hook is configured it still wins,
+  because it is explicit configuration; but prism now checks it against the class
+  and reports what it left out. That check is exact where the `@prop` cross-check
+  was inferential, and it names the mixin props a one-file hook cannot see.
+- **`config.formAssociated`.** `formAssociated` is a static on the class, so a
+  mixin-built form control answers the question the same way the browser does.
+- **`unparsed-prop-declaration`.** A declaration the source reader could not read
+  is no longer a prop that goes missing; the class has it either way.
+
+**And it finally promotes `doc-prop-undeclared`.** The finding was report-only
+for two releases because the population it found was one the consumer did not
+create and could not clear. That was never a problem with the rule — it was the
+evidence behind it. Read from a file, "no declaration here" is not the same claim
+as "no such property", because a mixin makes the first routinely untrue. Read
+from the class, the two claims are the same one, and a documented `@prop` that
+isn't there is a stale tag and a one-line fix in the file doing the complaining.
+
+So strictness follows the evidence: the finding fails `--strict` when it was
+checked against `elementProperties`, and reports when it was read from source.
+Nothing changes for a project that doesn't opt in, and no build fails for a
+backlog only prism could clear. It is acknowledgeable either way.
+
 ## 2.13.1 — 2026-08-15
 
 Reported from `arc-ui`, from a single catalog change that added 15 tags to

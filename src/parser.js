@@ -14,6 +14,9 @@
  *   plus the prop's own default
  * @property {string} docType - verbatim TS type from a non-union `@prop` JSDoc
  *   tag, e.g. `Array<{label: string}>`; empty when nothing usable was documented
+ * @property {string|null} attribute - the attribute this property is reflected
+ *   from, which is Lit's own lowercasing of the name unless `attribute:` says
+ *   otherwise, and null for `attribute: false`
  */
 
 /**
@@ -35,6 +38,9 @@
  *   asserting the component has no default slot and takes no children
  * @property {'static'|'hybrid'|'interactive'} interactivity - how much JS the component needs
  * @property {string} hostDisplay - CSS display value from :host (e.g. 'block', 'inline-flex')
+ * @property {boolean} formAssociated - whether the element participates in forms
+ *   (`static formAssociated = true`), which is the platform's own definition of
+ *   a form control and what decides which wrappers get a ControlValueAccessor
  */
 
 // A valid custom-element tag name: lowercase, at least one hyphen, no other
@@ -83,7 +89,12 @@ function makeWarn(diagnostics, filePath) {
  * @param {string} [prefix='arc'] - component tag prefix (e.g. 'arc' for arc-button)
  * @param {Record<string, string>} [overrides={}] - config.interactivity, tag → level
  * @param {Diagnostic[]} [diagnostics] - collector; suppresses console output
- * @param {{ propsFrom?: (source: string, filePath: string) => PropMeta[]|undefined }} [opts]
+ * @param {{
+ *   propsFrom?: (source: string, filePath: string) => PropMeta[]|undefined,
+ *   formAssociated?: (source: string, filePath: string) => boolean|undefined,
+ *   runtime?: { classes: Map<string, { props: PropMeta[], formAssociated: boolean }> },
+ * }} [opts] - `runtime` is this file's entry from `resolveRuntimeProps`, when
+ *   `config.runtime` is on and the module imported
  * @returns {ComponentMeta|null}
  */
 export function parseComponent(source, filePath, prefix = 'arc', overrides = {}, diagnostics = null, opts = {}) {
@@ -119,8 +130,15 @@ export function parseComponent(source, filePath, prefix = 'arc', overrides = {},
   // Resolve declared properties (config.propsFrom first, then the built-in
   // reader). Names the reader saw but couldn't type are collected so the
   // JSDoc cross-check below doesn't report the same prop a second time.
+  // What the class itself says, when `config.runtime` is on and the module
+  // imported. Keyed by export name, so this asks for the class the source names
+  // rather than guessing which export is the component.
+  const runtime = opts.runtime?.classes?.get(className) ?? null;
+
   const unparsed = new Set();
-  const props = resolveProps(source, filePath, opts.propsFrom, warn, tag, unparsed);
+  const { props, fromHook } = resolveProps(
+    source, filePath, opts.propsFrom, warn, tag, unparsed, runtime
+  );
 
   // Parse constructor defaults
   applyDefaults(props, source);
@@ -130,7 +148,8 @@ export function parseComponent(source, filePath, prefix = 'arc', overrides = {},
 
   // Read documented unions first — they are authored intent, and the CSS pass
   // below is only a fallback for props with no `@prop` union to go on.
-  applyDocTypes(props, source, warn, tag, unparsed);
+  const undeclared = applyDocTypes(props, source, warn, tag, unparsed);
+  reportUndeclaredDocProps(undeclared, props, fromHook, warn, tag, filePath, runtime);
   detectEnumValues(props, css, tag, warn);
 
   // Parse template from render(). Defaults are needed to pick the branch of a
@@ -152,10 +171,74 @@ export function parseComponent(source, filePath, prefix = 'arc', overrides = {},
   // single anonymous child list and named-slot content had nowhere to go.
   const { slots, slotsInMarkup, hasDefaultSlot, noDefaultSlot } = extractSlots(template, source);
 
+  const formAssociated = resolveFormAssociated(
+    source, filePath, opts.formAssociated, warn, tag, runtime
+  );
+
   return {
     tag, className, pascalName, tier, props, css, template, events, eventDetails,
     slots, slotsInMarkup, hasDefaultSlot, noDefaultSlot, interactivity, classification, hostDisplay,
+    formAssociated,
   };
+}
+
+/** `static formAssociated = true`, in either of the two ways it can be written. */
+const FORM_ASSOCIATED =
+  /static\s+formAssociated\s*=\s*true|static\s+get\s+formAssociated\s*\(\s*\)\s*\{\s*return\s+true/;
+
+/**
+ * Whether the element participates in forms.
+ *
+ * `static formAssociated = true` is the platform's own definition of a form
+ * control — it is what makes the browser attach ElementInternals and include the
+ * element in a form's submission — so no configuration is needed to decide which
+ * components deserve a ControlValueAccessor. Guessing from anything softer gets
+ * it wrong in both directions: "components that emit a change event" sweeps in
+ * tabs, theme toggles and sortable lists, none of which is a form control.
+ *
+ * The hook exists because a library that puts `formAssociated` in a *mixin*
+ * — `class ArcInput extends FormControlMixin(LitElement)` — carries the fact in
+ * a file prism was not handed. That is the same shape `config.propsFrom` exists
+ * for, so it gets the same answer: prism reads what it can read, and a repo whose
+ * declarations live somewhere else answers for itself. Returning undefined falls
+ * through, so a hook only has to know about the files it knows about.
+ *
+ * `config.runtime` removes the need for either: `formAssociated` is a static on
+ * the class, so importing it answers the question the same way the browser does,
+ * for a mixin-built class as readily as a plain one. The hook still wins where
+ * both are present, on the same terms as `propsFrom` — explicit configuration is
+ * a decision, not a guess.
+ */
+function resolveFormAssociated(source, filePath, hook, warn, tag, runtime) {
+  if (typeof hook === 'function') {
+    let answered;
+    try {
+      answered = hook(source, filePath);
+    } catch (err) {
+      // Same contract as propsFrom: a throwing hook loses its answer, not the
+      // run. Falling back to prism's own reader is the conservative direction —
+      // it can only decline to emit an accessor, never invent one.
+      warn(
+        'invalid-form-associated',
+        `config.formAssociated threw on ${filePath}: ${err.message} — falling back to prism's own reader.`,
+        { tag }
+      );
+      answered = undefined;
+    }
+    if (answered !== undefined) {
+      if (typeof answered !== 'boolean') {
+        warn(
+          'invalid-form-associated',
+          `config.formAssociated returned ${typeof answered} for ${filePath} — expected true, false, or undefined to fall through to prism's own reader. Ignoring it.`,
+          { tag }
+        );
+      } else {
+        return answered;
+      }
+    }
+  }
+  if (runtime) return runtime.formAssociated;
+  return FORM_ASSOCIATED.test(source);
 }
 
 /**
@@ -190,7 +273,7 @@ const KNOWN_PROP_TYPES = new Set(['String', 'Boolean', 'Number', 'Array', 'Objec
  * repo answer for itself. Returning undefined falls through to the built-in
  * reader, so a hook only has to handle the files it actually knows about.
  */
-function resolveProps(source, filePath, propsFrom, warn, tag, unparsed) {
+function resolveProps(source, filePath, propsFrom, warn, tag, unparsed, runtime) {
   if (typeof propsFrom === 'function') {
     let returned;
     try {
@@ -207,10 +290,117 @@ function resolveProps(source, filePath, propsFrom, warn, tag, unparsed) {
     }
     if (returned !== undefined && returned !== null) {
       const resolved = normalizeHookProps(returned, filePath, warn, tag);
-      if (resolved) return resolved;
+      // `fromHook` travels with the props because the one thing that cannot be
+      // validated about a hook is what it *didn't* return, and knowing the hook
+      // answered at all is what makes the cross-check below possible.
+      if (resolved) {
+        // The hook stays authoritative — it is explicit configuration, and a
+        // repo that has one has a reason. But where the class itself was also
+        // read, there is now something far better than the `@prop` tags to check
+        // it against, and the check is worth making precisely because it found
+        // the bug this whole feature exists for: a hook that reads one file
+        // cannot see what a mixin contributed, and reports a complete answer.
+        reportHookOmissions(resolved, runtime, warn, tag, filePath);
+        return { props: resolved, fromHook: true };
+      }
     }
   }
-  return parseProperties(source, warn, tag, unparsed);
+
+  // The class beats the file. Everything the source reader can do here it does
+  // by pattern-matching declarations it hopes it recognises; `elementProperties`
+  // is the flattened, finalized truth, mixins and base classes included.
+  //
+  // Note what this also retires: the source reader is what raises
+  // `unparsed-prop-declaration`, and a declaration it could not read is no
+  // longer a prop that goes missing — the class has it either way.
+  if (runtime) return { props: runtime.props, fromHook: false };
+
+  return { props: parseProperties(source, warn, tag, unparsed), fromHook: false };
+}
+
+/**
+ * Props the class has that the hook did not return.
+ *
+ * The failure this names is the one `props-from-under-reports` was built for,
+ * seen with certainty instead of inference. The JSDoc cross-check can only
+ * compare against what someone remembered to document; this compares against the
+ * property map Lit built from the class. In the reference consumer the answer
+ * was `readonly` and `required`, contributed by a form-control mixin the hook
+ * only ever saw one file of — missing from every wrapper of 25 components,
+ * while the hook returned a well-formed array prism had no reason to doubt.
+ */
+function reportHookOmissions(resolved, runtime, warn, tag, filePath) {
+  if (!runtime) return;
+  const returned = new Set(resolved.map((p) => p.name));
+  const missing = runtime.props.map((p) => p.name).filter((name) => !returned.has(name));
+  if (missing.length === 0) return;
+
+  warn(
+    'props-from-under-reports',
+    `config.propsFrom answered for ${filePath} with ${resolved.length} prop(s), but the class declares ` +
+    `${missing.map((n) => `"${n}"`).join(', ')} as well — read from ${tag ?? 'the component'}'s own ` +
+    'elementProperties, so this is what the element has rather than what its file says. Those props ' +
+    'reach no wrapper. A mixin or base class is the usual cause, since a hook reading one file cannot ' +
+    'see them. Removing the hook lets prism resolve every property from the class.',
+    { tag, props: missing }
+  );
+}
+
+/**
+ * Documented `@prop` names with no property behind them, reported at the
+ * altitude that fits how the props were resolved.
+ *
+ * Where prism read the declarations itself, each name is its own finding: the
+ * JSDoc describes a component the wrappers no longer match, one prop at a time.
+ *
+ * Where `config.propsFrom` answered, the same absence means something sharper.
+ * A hook that under-reports is indistinguishable from a correct one — prism
+ * validates every entry a hook *returns* (unknown type, missing name, non-array,
+ * throws) and there is by construction nothing to validate about an entry it
+ * never returned. Two real hook bugs shipped through that gap: an entry matcher
+ * that handled block comments but not line comments, and a scanner that split on
+ * a comma inside a comment. Both returned well-formed arrays prism accepted, and
+ * both silently removed a prop from six wrappers.
+ *
+ * The `@prop` tags are the one independent account of the same component prism
+ * already has, so a hook that answers for a file and returns strictly fewer
+ * props than that file documents is worth a finding even when its output is
+ * otherwise valid — the same insight as `doc-prop-undeclared`, applied to hook
+ * output. It is one finding per file rather than per name, because the fault
+ * being described is the hook's, not each prop's.
+ */
+function reportUndeclaredDocProps(undeclared, props, fromHook, warn, tag, filePath, runtime) {
+  if (undeclared.length === 0) return;
+
+  if (!fromHook) {
+    for (const name of undeclared) {
+      warn(
+        'doc-prop-undeclared',
+        runtime
+          ? `${tag ?? 'component'} documents \`@prop ${name}\` but the class has no reactive property by that name — checked against its own elementProperties, mixins and base classes included, so the tag is describing something that does not exist. Nothing called "${name}" reaches the generated wrappers.`
+          : `${tag ?? 'component'} documents \`@prop ${name}\` but declares no reactive property by that name — nothing called "${name}" reaches the generated wrappers.`,
+        // Strictness follows the evidence, which is the whole reason this
+        // finding could never be promoted before. Read from source, "no
+        // declaration here" is not the same claim as "no property" — a mixin
+        // contributes properties the file cannot show, and failing a build on
+        // that meant failing it for a backlog only prism could clear. Read from
+        // the class, the two claims are the same one, and a documented prop that
+        // is not on it is simply a stale tag.
+        { tag, prop: name, strict: Boolean(runtime) }
+      );
+    }
+    return;
+  }
+
+  warn(
+    'props-from-under-reports',
+    `config.propsFrom answered for ${filePath} with ${props.length} prop(s), but the file documents ` +
+    `\`@prop\` ${undeclared.map((n) => `"${n}"`).join(', ')} with nothing matching in what came back — ` +
+    'so those props reach no wrapper. A prop your hook omits looks exactly like a prop that does not ' +
+    'exist, which is why this is reported rather than trusted: either the hook is dropping them, or ' +
+    'the tags are stale. Prefer throwing over returning a partial array.',
+    { tag, props: undeclared }
+  );
 }
 
 /**
@@ -272,6 +462,11 @@ function normalizeHookProps(returned, filePath, warn, tag) {
       reflect: entry.reflect === true,
       values: Array.isArray(entry.values) ? entry.values.filter((v) => typeof v === 'string') : [],
       docType: typeof entry.docType === 'string' ? entry.docType : '',
+      // A hook that says nothing about the attribute gets Lit's own default,
+      // which is what its declaration would have got had prism read it.
+      attribute: entry.attribute === false ? null
+        : typeof entry.attribute === 'string' ? entry.attribute
+          : entry.name.toLowerCase(),
     });
   }
   return out;
@@ -474,7 +669,28 @@ function makeProp(name, config) {
     reflect: reflectMatch ? reflectMatch[1] === 'true' : false,
     values: [],
     docType: '',
+    attribute: attributeName(name, config),
   };
+}
+
+/**
+ * The attribute a property is reachable from in markup.
+ *
+ * Lit lowercases the property name unless told otherwise, which is why
+ * `confirmLabel` is `confirmlabel` and not `confirm-label` — a distinction that
+ * matters to anything typing the element's markup surface, because the wrong one
+ * is a name nothing responds to. `attribute: false` means the property has no
+ * markup spelling at all.
+ *
+ * @param {string} name
+ * @param {string} config - the declaration's own keys, nested objects stripped
+ * @returns {string|null}
+ */
+function attributeName(name, config) {
+  const match = config.match(/\battribute\s*:\s*(false|'[^']*'|"[^"]*")/);
+  if (!match) return name.toLowerCase();
+  if (match[1] === 'false') return null;
+  return match[1].slice(1, -1);
 }
 
 /**
@@ -549,9 +765,13 @@ const PORTABLE_TYPE_NAMES = new Set([
  * @param {string} source
  * @param {(code: string, message: string, extra?: object) => void} warn
  * @param {string} [tag]
+ * @returns {string[]} documented names with no property behind them, left for
+ *   `reportUndeclaredDocProps` to describe — the right wording depends on
+ *   whether a hook resolved the props, which this function has no view of
  */
 function applyDocTypes(props, source, warn, tag, unparsed = new Set()) {
   const byName = new Map(props.map((p) => [p.name, p]));
+  const undeclared = [];
   // Braces are matched rather than regex-captured: a nested object type such as
   // `{Array<{label: string}>}` ends at its *matching* brace, and `[^}]+` would
   // truncate it to `Array<{label: string` — emitting a broken type.
@@ -569,16 +789,11 @@ function applyDocTypes(props, source, warn, tag, unparsed = new Set()) {
     // A documented prop with no declaration behind it is the one disagreement
     // prism can detect with what it already parses — and the shape a silent
     // prop loss takes: the JSDoc still describes the component, while the
-    // wrappers no longer have the prop. Reported per name, so five `@prop`
-    // tags over a properties block prism couldn't read say so five times.
+    // wrappers no longer have the prop.
     if (!prop) {
       // Already reported, in more detail, as an unreadable declaration.
       if (unparsed.has(nameMatch[1])) continue;
-      warn(
-        'doc-prop-undeclared',
-        `${tag ?? 'component'} documents \`@prop ${nameMatch[1]}\` but declares no reactive property by that name — nothing called "${nameMatch[1]}" reaches the generated wrappers.`,
-        { tag, prop: nameMatch[1] }
-      );
+      undeclared.push(nameMatch[1]);
       continue;
     }
 
@@ -624,6 +839,9 @@ function applyDocTypes(props, source, warn, tag, unparsed = new Set()) {
 
     prop.docType = typeText;
   }
+
+  // Deduped: a name documented twice is one absence, not two.
+  return [...new Set(undeclared)];
 }
 
 /**

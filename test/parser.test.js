@@ -366,6 +366,32 @@ describe('parseComponent', () => {
       const meta = parseComponent(source, '/src/content/thing.js', prefix);
       expect(meta.props.map((p) => p.name)).toEqual(['label']);
     });
+
+    it('records the attribute each property is reachable from', () => {
+      // Lit lowercases the property name; it does not kebab-case it. Anything
+      // typing the element's markup surface needs the difference, because the
+      // other spelling is a name nothing responds to.
+      const source = `
+        /** @tag arc-thing */
+        export class ArcThing extends LitElement {
+          static properties = {
+            label: { type: String },
+            confirmLabel: { type: String },
+            hint: { type: String, attribute: 'hint-text' },
+            internalOnly: { type: String, attribute: false },
+          };
+        }
+      `;
+      const attrs = Object.fromEntries(
+        parseComponent(source, '/src/content/thing.js', prefix).props.map((p) => [p.name, p.attribute])
+      );
+      expect(attrs).toEqual({
+        label: 'label',
+        confirmLabel: 'confirmlabel',
+        hint: 'hint-text',
+        internalOnly: null,
+      });
+    });
   });
 
   describe('declarations the reader cannot type', () => {
@@ -463,6 +489,7 @@ describe('parseComponent', () => {
 
       expect(meta.props).toEqual([{
         name: 'selected', type: 'Number', default: '0', reflect: true, values: [], docType: '',
+        attribute: 'selected',
       }]);
       // The hook answered, so the built-in reader never ran and has nothing to report.
       expect(diagnostics).toHaveLength(0);
@@ -482,6 +509,7 @@ describe('parseComponent', () => {
       });
       expect(meta.props[0]).toEqual({
         name: 'selected', type: 'Number', default: '', reflect: false, values: [], docType: '',
+        attribute: 'selected',
       });
     });
 
@@ -542,6 +570,49 @@ describe('parseComponent', () => {
       expect(meta.props.map((p) => p.name)).toEqual(['label']);
       expect(diagnostics[0].code).toBe('invalid-props-from');
       expect(diagnostics[0].message).toContain('boom');
+    });
+
+    it('reports a hook that returns fewer props than the file documents', () => {
+      // The one thing that cannot be validated about a hook is what it did not
+      // return: an omitted entry looks exactly like a prop that does not exist,
+      // and both reach no wrapper. The `@prop` tags are the only independent
+      // account of the same component prism has.
+      const documented = `
+        /**
+         * @tag arc-carousel
+         * @prop {number} selected - active index
+         * @prop {boolean} loop - wrap at the ends
+         */
+        export class ArcCarousel extends LitElement {
+          static properties = { selected: int(), loop: flag() };
+        }
+      `;
+      const diagnostics = [];
+      parseComponent(documented, '/src/content/carousel.js', prefix, {}, diagnostics, {
+        propsFrom: () => [{ name: 'selected', type: 'Number' }],
+      });
+
+      const finding = diagnostics.find((d) => d.code === 'props-from-under-reports');
+      expect(finding).toBeDefined();
+      expect(finding.props).toEqual(['loop']);
+      // One finding for the file, not one per name: the fault being described is
+      // the hook's, not each prop's.
+      expect(diagnostics.filter((d) => d.code === 'doc-prop-undeclared')).toHaveLength(0);
+    });
+
+    it('leaves the per-name finding in place where prism read the declarations itself', () => {
+      const documented = `
+        /**
+         * @tag arc-carousel
+         * @prop {boolean} loop - contributed by a mixin
+         */
+        export class ArcCarousel extends LitElement {
+          static properties = { selected: { type: Number } };
+        }
+      `;
+      const diagnostics = [];
+      parseComponent(documented, '/src/content/carousel.js', prefix, {}, diagnostics);
+      expect(diagnostics.map((d) => d.code)).toEqual(['doc-prop-undeclared']);
     });
 
     it('applies constructor defaults and documented unions over hook-resolved props', () => {

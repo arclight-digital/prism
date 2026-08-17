@@ -175,6 +175,51 @@ export function verifyRegistration(framework, content, meta, register) {
 }
 
 /**
+ * Whether a form control's generated wrapper still carries its accessor.
+ *
+ * The same shape of check as the registration one above, for the same reason: a
+ * missing ControlValueAccessor is invisible from every direction that isn't the
+ * file itself. The wrapper compiles, `ng-packagr --strictTemplates` passes, and
+ * a consumer writing `<arc-input formControlName="email">` gets no error — the
+ * binding simply does nothing, and the control stays pristine and empty while
+ * the element on screen holds the user's text.
+ *
+ * Only Angular. Nothing else prism generates has an equivalent — Vue's
+ * `v-model` and Svelte's `bind:` are two-way bindings on a prop, which the
+ * generators already emit.
+ *
+ * @param {string} framework
+ * @param {string} content - the generated file's contents
+ * @param {null | { problem?: string }} binding - `formBinding`'s answer for this
+ *   component; null when it isn't form-associated, `problem` when prism knows it
+ *   is one but not what a form should bind
+ * @returns {string|null} the marker that is missing, or null
+ */
+export function verifyAccessor(framework, content, binding) {
+  if (framework !== 'angular' || !binding || binding.problem) return null;
+  // The provider registration rather than the `implements` clause: a class whose
+  // name collides with an Angular symbol has its imports aliased, and the token
+  // is the one part of the shape no alias can move.
+  const marker = 'provide: NG_VALUE_ACCESSOR,';
+  return content.includes(marker) ? null : marker;
+}
+
+/**
+ * Human-readable diagnostic for a form control with no accessor in its wrapper.
+ *
+ * @param {import('./parser.js').ComponentMeta} meta
+ * @returns {string}
+ */
+export function describeMissingAccessor(meta) {
+  return (
+    `${meta.tag}: the generated Angular wrapper is form-associated but registers no ` +
+    'ControlValueAccessor, so `formControlName`, `formControl` and `[(ngModel)]` bind nothing on it. ' +
+    'The binding compiles and reports nothing — the control stays pristine and empty while the ' +
+    'element holds the user\'s value. This is a prism bug, not a component one.'
+  );
+}
+
+/**
  * Human-readable diagnostic for a wrapper that registers nothing.
  *
  * @param {string} framework

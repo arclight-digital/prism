@@ -288,6 +288,37 @@ describe('normalizeConfig — binding overrides', () => {
   });
 });
 
+describe('config.runtime', () => {
+  const base = { components: 'src', tiers: ['content'] };
+
+  it('is off unless asked for, because importing a module runs it', () => {
+    expect(normalizeConfig({ ...base }).runtime).toBeUndefined();
+  });
+
+  it('accepts the shorthand', () => {
+    expect(normalizeConfig({ ...base, runtime: true }).runtime).toEqual({});
+  });
+
+  it('treats false as off rather than as an empty options object', () => {
+    expect(normalizeConfig({ ...base, runtime: false }).runtime).toBeUndefined();
+  });
+
+  it('accepts a setup module', () => {
+    const c = normalizeConfig({ ...base, runtime: { setup: './scripts/dom-shim.js' } });
+    expect(c.runtime.setup).toBe('./scripts/dom-shim.js');
+  });
+
+  it('rejects a setup that is not a path', () => {
+    expect(() => normalizeConfig({ ...base, runtime: { setup: true } }))
+      .toThrow(/must be a path to a module/);
+  });
+
+  it('rejects a shape it cannot use', () => {
+    expect(() => normalizeConfig({ ...base, runtime: 'yes' }))
+      .toThrow(/must be true, false, or an object/);
+  });
+});
+
 describe('config.acknowledge', () => {
   const base = { components: 'src', tiers: ['content'] };
 
@@ -310,6 +341,48 @@ describe('config.acknowledge', () => {
   it('rejects an unknown field', () => {
     expect(() => normalizeConfig({ ...base, acknowledge: [{ code: 'doc-drift', reason: 'x' }] }))
       .toThrow(/unknown field "reason"/);
+  });
+
+  it('rejects a narrowing field the finding never carries', () => {
+    // Otherwise the entry matches nothing and the *only* feedback is
+    // `unmatched-acknowledge` — "the issue is gone, or the entry no longer
+    // describes it" — which names the one conclusion that isn't true while the
+    // finding is still live and still failing the build.
+    expect(() => normalizeConfig({
+      ...base,
+      acknowledge: [{ code: 'props-from-under-reports', tag: 'arc-input', prop: 'value' }],
+    })).toThrow(/carry no "prop"/);
+  });
+
+  it('says why, for the code whose findings are per-file rather than per-prop', () => {
+    expect(() => normalizeConfig({
+      ...base,
+      acknowledge: [{ code: 'props-from-under-reports', prop: 'value' }],
+    })).toThrow(/the fault is the hook's rather than any one prop's/);
+  });
+
+  it('accepts the narrowing that does work', () => {
+    const c = normalizeConfig({
+      ...base,
+      acknowledge: [{ code: 'props-from-under-reports', tag: 'arc-input', note: 'accessor pair, not reactive' }],
+    });
+    expect(c.acknowledge).toHaveLength(1);
+  });
+
+  it('rejects a tag on a finding that describes output rather than a component', () => {
+    expect(() => normalizeConfig({
+      ...base,
+      acknowledge: [{ code: 'exports-target-missing', tag: 'arc-input' }],
+    })).toThrow(/carry no "tag"/);
+  });
+
+  it('judges no fields on a code it does not recognise', () => {
+    // That entry is dropped and reported anyway, and judging its shape would
+    // version-lock the config in the direction the unknown-code rule avoids.
+    expect(() => normalizeConfig({
+      ...base,
+      acknowledge: [{ code: 'from-a-newer-release', prop: 'value' }],
+    })).not.toThrow();
   });
 
   it('requires a code', () => {

@@ -84,27 +84,21 @@ export function formatBytes(n) {
  * misclassification list. Both are routine on every run — failing on them would
  * mean `--strict` never passes, and a check that never passes gets removed.
  *
- * Also deliberately not included, and for a different reason:
- * `doc-prop-undeclared`. It is not wrong — a documented `@prop` with nothing
- * behind it really is missing from every wrapper. It is excluded because the
- * population it finds is one the consumer did not create and cannot clear.
- * Prism reads a component's own source, so a prop contributed by a mixin is
- * invisible to it: the reference consumer has 18 of these, 16 from a single
- * form-control mixin, and `readonly` is absent from 14 React wrappers that
- * document it. Failing a build on a backlog the consumer can't fix without
- * prism changing first is how a minor upgrade teaches people to pin.
+ * Absent from this list, but able to fail a run anyway: `doc-prop-undeclared`.
+ * It was excluded for two releases because the population it found was one the
+ * consumer did not create and could not clear — prism read a component's own
+ * source, so a prop contributed by a mixin was invisible to it, and the
+ * reference consumer had 18 findings, 16 from a single form-control mixin.
+ * Failing a build on a backlog only prism could clear is how a major upgrade
+ * teaches people to pin.
  *
- * The order that makes it promotable is to fix the cause rather than soften
- * the rule: resolve properties at runtime from `Ctor.elementProperties`, which
- * makes mixin-contributed props visible, and both the diagnostic and the
- * missing wrapper props go away together.
- *
- * That work is additive, so it lands in a 2.x minor rather than waiting for a
- * major — arc-ui v4's declaration layer needs it to retire the
- * `static properties` / `static contract` split, and a consumer shouldn't have
- * to wait on a prism major for an additive fix. The promotion to strict
- * follows in 3.0.0, against a population near zero, at a boundary where new
- * failures are expected.
+ * The fix was the cause rather than the rule. With `config.runtime` on, prism
+ * reads `Ctor.elementProperties` — the flattened property map Lit builds from
+ * the class, mixins included — and the finding changes meaning: not "no
+ * declaration in this file", which a mixin makes routinely untrue, but "no such
+ * property", which is a stale tag and a one-line fix. So it fails when it was
+ * checked against the class and reports when it was read from source. See
+ * `strictFailures`.
  *
  * @param {import('./parser.js').Diagnostic[]} diagnostics
  */
@@ -116,11 +110,37 @@ export const STRICT_CODES = [
   // build it turns red belonged to someone already losing props in silence.
   'unparsed-prop-declaration',
   'invalid-props-from',
+  'props-from-under-reports',
+  'invalid-form-associated',
+  // A module `config.runtime` was meant to read but couldn't. Strict because
+  // the answer it degrades to is the one runtime resolution was turned on to
+  // replace: that component's mixin-contributed props are silently missing from
+  // every wrapper again, and nothing else would say so.
+  'runtime-unavailable',
+  // A form control whose Angular wrapper got no ControlValueAccessor. Grouped
+  // with the prop findings because it is the same kind of loss — a binding a
+  // consumer writes, that compiles, and that does nothing at runtime.
+  'form-control-unbindable',
+  // A run that rewrote output a newer prism had written. Near the top because
+  // the damage is already done by the time it prints and it is the only finding
+  // here that says so: the files have been reverted, and the single run that
+  // reports it is the last moment anyone sees the two versions side by side.
+  // It clears itself on the next run — the files now carry the older stamp — so
+  // a warning missed is a warning gone.
+  'generator-downgrade',
   // Above the slot check because its failure is total rather than partial: a
   // wrapper that registers nothing renders an inert element, so every other
   // thing it gets right is unobservable.
   'wrapper-missing-register',
+  'wrapper-missing-accessor',
   'wrapper-missing-slot',
+  'exports-target-missing',
+  'exports-subpath-collision',
+  // A configured JSX declaration file prism declined to write because something
+  // else already owns that path. Strict, unlike the identical situation for a
+  // wrapper, because the two mean different things — see the code's label and
+  // the note in cli.js where it is raised.
+  'jsx-types-not-written',
   'slot-name-not-identifier',
   'framework-reserved',
   'doc-drift',
@@ -133,12 +153,89 @@ export const STRICT_CODES = [
 
 /**
  * Codes an `acknowledge` entry may name. Its own staleness isn't waivable, and
- * neither is `invalid-props-from` — that one reports a config hook returning
+ * neither are the two hook findings — those report a config hook returning
  * something prism can't use, which is a bug in the config doing the
  * acknowledging rather than a finding about a component.
  */
-const UNWAIVABLE = new Set(['unmatched-acknowledge', 'invalid-props-from']);
-export const ACKNOWLEDGEABLE_CODES = STRICT_CODES.filter((c) => !UNWAIVABLE.has(c));
+const UNWAIVABLE = new Set([
+  'unmatched-acknowledge', 'invalid-props-from', 'invalid-form-associated',
+]);
+
+/**
+ * Codes that are not always strict but can be, so still have to be waivable.
+ *
+ * `doc-prop-undeclared` fails only when it was checked against the class rather
+ * than the file — see `strictFailures`. A code that can fail a build and cannot
+ * be acknowledged is a code with no way out of a decision someone has already
+ * made, which is the position `--strict` exists to avoid.
+ */
+const CONDITIONALLY_STRICT = ['doc-prop-undeclared'];
+
+export const ACKNOWLEDGEABLE_CODES = [...STRICT_CODES, ...CONDITIONALLY_STRICT]
+  .filter((c) => !UNWAIVABLE.has(c));
+
+/**
+ * Which narrowing fields each acknowledgeable code actually carries.
+ *
+ * `acknowledge` narrows by stating fields that must match, and a field the
+ * finding never sets can never match — so `{ code, tag, prop }` against a code
+ * that carries no `prop` waives nothing. That would be tolerable if it were
+ * visible, and it is the opposite: the entry matches nothing, so it is reported
+ * as `unmatched-acknowledge` — "the issue is gone, or the entry no longer
+ * describes it" — which names the one conclusion that isn't true while the
+ * finding is still live and still failing the build. Two findings, both
+ * misleading, from one field that was never going to match.
+ *
+ * `props-from-under-reports` is the case that surfaced it: it carries `props`,
+ * plural, because the fault it describes is the hook's rather than any one
+ * prop's, so the natural `{ code, tag, prop: 'value' }` silently did nothing.
+ *
+ * Anything not listed narrows by `tag` alone. **Keep this in step with the
+ * fields the diagnostics are constructed with** — a code that starts carrying a
+ * `prop` and isn't added here rejects a legitimate entry, loudly, at config
+ * load, which is the failure direction to prefer.
+ */
+const CARRIES_PROP = new Set([
+  'unparsed-prop-declaration',
+  'slot-name-not-identifier',
+  'framework-reserved',
+  'doc-drift',
+  'doc-prop-undeclared',
+]);
+
+/** Codes that describe output or config rather than a component. */
+const CARRIES_NO_TAG = new Set([
+  'generator-downgrade',
+  'exports-target-missing',
+  'exports-subpath-collision',
+  'jsx-types-not-written',
+  'runtime-unavailable',
+]);
+
+/**
+ * Why an `acknowledge` entry could never match, or null if it could.
+ *
+ * Called at config load, so the answer arrives before the run rather than as a
+ * pair of contradictory findings after it.
+ *
+ * @param {{ code: string, tag?: string, prop?: string }} entry
+ * @returns {string|null}
+ */
+export function unmatchableAckField(entry) {
+  // An unrecognised code is dropped and reported elsewhere; judging its fields
+  // would version-lock the config in the direction normalizeConfig avoids.
+  if (!ACKNOWLEDGEABLE_CODES.includes(entry.code)) return null;
+  if (entry.prop !== undefined && !CARRIES_PROP.has(entry.code)) {
+    return `${entry.code} findings carry no "prop", so this entry would match nothing`
+      + (entry.code === 'props-from-under-reports'
+        ? ' — it names every under-reported prop in a file at once, as "props", because the fault is the hook\'s rather than any one prop\'s. Narrow by tag instead.'
+        : '. Narrow by tag instead.');
+  }
+  if (entry.tag !== undefined && CARRIES_NO_TAG.has(entry.code)) {
+    return `${entry.code} findings describe generated output rather than a component, so they carry no "tag" and this entry would match nothing. Drop the tag to waive the code.`;
+  }
+  return null;
+}
 
 /**
  * True if an `acknowledge` entry covers a diagnostic.
@@ -201,11 +298,27 @@ export function partitionAcknowledged(diagnostics, acknowledge = []) {
   return { active, accepted, stale };
 }
 
+/**
+ * Diagnostics that fail this run.
+ *
+ * Mostly a question about the code, and for one finding a question about the
+ * evidence behind it. `doc-prop-undeclared` is the same claim either way — a
+ * documented `@prop` with nothing behind it — but read from source it means
+ * "no declaration in this file", which a mixin makes routinely untrue, and read
+ * from the class it means "no such property", which is simply a stale tag. The
+ * first cannot fail a build without failing it for a backlog the consumer did
+ * not create; the second is a one-line fix in the file being complained about.
+ * So the finding carries `strict` when it was checked against the class.
+ *
+ * @param {import('./parser.js').Diagnostic[]} diagnostics
+ */
 export function strictFailures(diagnostics) {
   const rank = new Map(STRICT_CODES.map((c, i) => [c, i]));
   return diagnostics
-    .filter((d) => rank.has(d.code))
-    .sort((a, b) => rank.get(a.code) - rank.get(b.code));
+    .filter((d) => rank.has(d.code) || d.strict === true)
+    // Findings that are strict only by evidence sort after the always-strict
+    // codes, which is where an unranked code lands anyway.
+    .sort((a, b) => (rank.get(a.code) ?? STRICT_CODES.length) - (rank.get(b.code) ?? STRICT_CODES.length));
 }
 
 /**

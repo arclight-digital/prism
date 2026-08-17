@@ -23,6 +23,22 @@ export default {
     'arc-copy-button': { exclude: ['value'] },
   },
 
+  // Resolve properties from the component class by importing it, rather than
+  // from the file that declares it. This is the only way a property contributed
+  // by a mixin or a base class is visible at all — `class ArcInput extends
+  // FormControlMixin(LitElement)` really has `readonly`, and reading input.js
+  // will never find it.
+  //
+  // Opt-in because importing a module runs it, and prism otherwise executes
+  // nothing. A module that won't import costs that one component its runtime
+  // answer, is reported, and falls back to the source reader.
+  //
+  // With this on, `propsFrom` and `formAssociated` below are both unnecessary:
+  // a helper-built declaration is an ordinary reactive property by the time the
+  // class exists, and `formAssociated` is a static on it.
+  runtime: true,
+  // runtime: { setup: './scripts/dom-shim.js' },  // if imports need a DOM
+
   // Resolve property declarations prism's own reader can't. It understands
   // object literals and `@property()` decorators; a declaration built by a
   // helper — `selected: int({ min: 0, clamp: 'toRange' })` — means something
@@ -40,6 +56,27 @@ export default {
   //   }));
   // },
 
+  // Whether an element is form-associated, where prism can't see it for itself.
+  // It reads `static formAssociated = true` from the component's own source; a
+  // library that contributes it from a mixin keeps the fact in a file prism was
+  // never handed. Form-associated elements are the ones whose Angular wrappers
+  // get a ControlValueAccessor, which is what makes formControlName, formControl
+  // and [(ngModel)] work — without one they bind nothing and report nothing.
+  // Omit this entirely if your components declare it themselves.
+  //
+  // formAssociated(source) {
+  //   return /FormControlMixin\(/.test(source) || undefined;
+  // },
+
+  // The property a form binds, where the convention doesn't answer. Prism binds
+  // `checked` if a control declares it and `value` otherwise; these are the
+  // controls whose value is a *pair*, which a ControlValueAccessor carries as an
+  // object because it carries exactly one value.
+  formValue: {
+    'arc-date-range-picker': ['start', 'end'],
+    'arc-range-slider': ['low', 'high'],
+  },
+
   // Findings you've already decided about, so `--strict` can pass. Some
   // findings are correct and stay correct — the fix was made, and the finding
   // is still true. Waived findings are still printed under `prism: accepted:`,
@@ -54,11 +91,22 @@ export default {
     },
   ],
 
-  // React output
+  // React output. `packageJson` opts the package into having its `exports` map
+  // written from the generated file tree — a subpath per component, so a
+  // consumer that can't tree-shake a barrel imports one without the rest.
   react: {
     outDir: 'packages/react/src',
     wcPackage: '@arclux/arc-ui',
     barrels: true,
+    packageJson: 'packages/react/package.json',
+  },
+
+  // Opt-in JSX typings, for consumers who render <arc-button> directly instead
+  // of importing a wrapper. One file per framework, each augmenting the module
+  // that framework actually resolves JSX.IntrinsicElements through.
+  jsxTypes: {
+    outDir: 'packages/web-components/types',
+    frameworks: ['react', 'preact', 'solid'],
   },
 
   // HTML/CSS output

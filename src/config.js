@@ -6,10 +6,15 @@
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { VALID_TAG } from './parser.js';
-import { ACKNOWLEDGEABLE_CODES } from './report.js';
+import { ACKNOWLEDGEABLE_CODES, unmatchableAckField } from './report.js';
+import { JSX_FRAMEWORKS } from './generators/jsx-types.js';
+import { EXPORTABLE, EXPORT_MODES } from './generators/exports-map.js';
 
 /** The classification levels `config.interactivity` may assign. */
 const LEVELS = new Set(['static', 'hybrid', 'interactive']);
+
+/** The config sections that generate framework wrappers. */
+const FRAMEWORK_SECTIONS = ['react', 'vue', 'svelte', 'angular', 'solid', 'preact'];
 
 /** Fields an `acknowledge` entry may carry. */
 const ACK_FIELDS = new Set(['code', 'tag', 'prop', 'note']);
@@ -152,6 +157,14 @@ export function normalizeConfig(config) {
         throw new Error(`prism: config.acknowledge[${i}].${field} must be a string`);
       }
     }
+    // A narrowing field the finding never carries can never match, and the only
+    // feedback would be `unmatched-acknowledge` blaming the finding for being
+    // gone while it is still live. Said here instead, at the moment the entry is
+    // written.
+    const unmatchable = unmatchableAckField(entry);
+    if (unmatchable) {
+      throw new Error(`prism: config.acknowledge[${i}] — ${unmatchable}`);
+    }
   }
 
   // Entries naming a code this version doesn't know are dropped so they can't
@@ -172,15 +185,156 @@ export function normalizeConfig(config) {
     );
   }
 
+  // Form-association resolver hook. Prism reads `static formAssociated = true`
+  // from the component's own source; a library that contributes it from a mixin
+  // — `class ArcInput extends FormControlMixin(LitElement)` — keeps the fact in
+  // a file prism was never handed. Same shape and same reasoning as propsFrom.
+  if (config.formAssociated !== undefined && typeof config.formAssociated !== 'function') {
+    throw new Error(
+      'prism: config.formAssociated must be a function (source, filePath) returning true, false, or undefined to fall through to prism\'s own reader'
+    );
+  }
+
+  // Which property a form binds on a given component. Needed only where the
+  // convention doesn't answer: a control whose value is a *pair* (a date range
+  // is start/end, a range slider is low/high) has no single `value` for a
+  // ControlValueAccessor to carry, and without an entry here it would be the one
+  // control in the catalog where `formControlName` silently does nothing.
+  //
+  // Validated on the same terms as `interactivity` and `bindings`: a typo here
+  // would leave the convention in place while looking like it had been
+  // overridden, which is worse than no override at all.
+  if (config.formValue !== undefined
+      && (typeof config.formValue !== 'object' || config.formValue === null
+          || Array.isArray(config.formValue))) {
+    throw new Error('prism: config.formValue must be an object mapping tag names to property names');
+  }
+  config.formValue = config.formValue || {};
+  for (const [tag, value] of Object.entries(config.formValue)) {
+    if (!VALID_TAG.test(tag)) {
+      throw new Error(`prism: config.formValue key "${tag}" is not a valid custom-element tag`);
+    }
+    const names = Array.isArray(value) ? value : [value];
+    if (names.length === 0 || names.some((n) => typeof n !== 'string' || n.length === 0)) {
+      throw new Error(
+        `prism: config.formValue["${tag}"] must be a property name, or an array of them for a compound value`
+      );
+    }
+  }
+
   config.prefix = config.prefix || 'arc';
   config.ignore = config.ignore || [];
   config.tiers = config.tiers || [];
 
-  // Propagate prefix and bindings to each framework config section
-  for (const key of ['react', 'vue', 'svelte', 'angular', 'solid', 'preact', 'html', 'css']) {
+  // Resolve properties from the class rather than from the file that declares
+  // it. Opt-in, and deliberately so: reading `Ctor.elementProperties` means
+  // importing the module, and importing a module runs it. Prism has never
+  // executed a line of a consumer's code, and turning that on by default would
+  // be a change of kind rather than degree — a config file is the right place to
+  // say yes to it.
+  if (config.runtime !== undefined) {
+    if (config.runtime === true) config.runtime = {};
+    if (config.runtime === false) {
+      config.runtime = undefined;
+    } else if (typeof config.runtime !== 'object' || config.runtime === null
+        || Array.isArray(config.runtime)) {
+      throw new Error('prism: config.runtime must be true, false, or an object, e.g. { setup: "./scripts/dom-shim.js" }');
+    } else if (config.runtime.setup !== undefined) {
+      if (typeof config.runtime.setup !== 'string' || config.runtime.setup.length === 0) {
+        throw new Error('prism: config.runtime.setup must be a path to a module that installs whatever DOM your components need at import time');
+      }
+    }
+  }
+
+  // Opt-in JSX declaration files, for consumers rendering the elements directly
+  // instead of through a wrapper package.
+  if (config.jsxTypes !== undefined) {
+    if (typeof config.jsxTypes !== 'object' || config.jsxTypes === null || Array.isArray(config.jsxTypes)) {
+      throw new Error('prism: config.jsxTypes must be an object, e.g. { outDir: "packages/web-components/types" }');
+    }
+    if (typeof config.jsxTypes.outDir !== 'string' || config.jsxTypes.outDir.length === 0) {
+      throw new Error('prism: config.jsxTypes.outDir is required and must be a path to write the declaration files to');
+    }
+    if (config.jsxTypes.frameworks !== undefined) {
+      if (!Array.isArray(config.jsxTypes.frameworks)) {
+        throw new Error(`prism: config.jsxTypes.frameworks must be an array naming any of ${JSX_FRAMEWORKS.join(', ')}`);
+      }
+      for (const name of config.jsxTypes.frameworks) {
+        if (!JSX_FRAMEWORKS.includes(name)) {
+          throw new Error(
+            `prism: config.jsxTypes.frameworks names "${name}" — only ${JSX_FRAMEWORKS.join(', ')} have a JSX namespace to augment`
+          );
+        }
+      }
+    }
+    config.jsxTypes.prefix = config.prefix;
+
+    // The package name in the activation instructions these files carry.
+    //
+    // It used to fall back to the `@{prefix}/{prefix}-ui` convention, silently,
+    // and that is a worse failure here than anywhere else prism uses that
+    // default: the generated header tells a consumer to add
+    // `node_modules/<pkg>/types/react-jsx.d.ts` to their tsconfig, and a guessed
+    // package name is a path that resolves to nothing, includes nothing, and
+    // reports nothing — which is *precisely* the silent no-op the rest of that
+    // same header warns about at length. A file explaining a trap while setting
+    // one is not a file to ship.
+    //
+    // So it is inherited from the wrapper sections, which already name the
+    // package their imports come from, and is only demanded when inheriting
+    // would be a guess: when they disagree, or when there are none.
+    if (config.jsxTypes.wcPackage === undefined) {
+      const named = new Set(
+        FRAMEWORK_SECTIONS
+          .filter((key) => config[key])
+          .map((key) => config[key].wcPackage || `@${config.prefix}/${config.prefix}-ui`)
+      );
+      if (named.size !== 1) {
+        throw new Error(
+          named.size === 0
+            ? 'prism: config.jsxTypes.wcPackage is required when no framework wrapper section is configured — the generated files tell consumers which package to include the declarations from, and prism has nothing to infer that name from'
+            : `prism: config.jsxTypes.wcPackage is required when the framework sections name different packages (${[...named].join(', ')}) — the generated files can only tell consumers to include the declarations from one of them`
+        );
+      }
+      config.jsxTypes.wcPackage = [...named][0];
+    }
+  }
+
+  // Wrapper package `exports` maps, written from the generated file tree.
+  for (const [key, section] of Object.entries(config)) {
+    if (!section || typeof section !== 'object' || section.packageJson === undefined) continue;
+    if (typeof section.packageJson !== 'string' || section.packageJson.length === 0) {
+      throw new Error(`prism: config.${key}.packageJson must be a path to that package's package.json`);
+    }
+    // Refused rather than written wrong. ng-packagr produces the published
+    // manifest for an Angular library and copies anything in the source one
+    // verbatim into dist, so an `exports` map written here ships broken — the
+    // failure lands on a consumer's build, several steps from the config that
+    // caused it.
+    if (key === 'angular') {
+      throw new Error(
+        'prism: config.angular.packageJson is not supported — ng-packagr owns the published package.json for an Angular library (Angular Package Format), and an exports map written into the source manifest is copied into dist and ships broken'
+      );
+    }
+    if (!EXPORTABLE.includes(key)) {
+      throw new Error(
+        `prism: config.${key}.packageJson has no meaning — an exports map can be written for ${EXPORTABLE.join(', ')}`
+      );
+    }
+    if (section.exportsMode !== undefined && !EXPORT_MODES.includes(section.exportsMode)) {
+      throw new Error(
+        `prism: config.${key}.exportsMode is "${section.exportsMode}" — must be one of ${EXPORT_MODES.join(', ')}`
+      );
+    }
+  }
+
+  // Propagate prefix, bindings and form-value overrides to each framework
+  // config section
+  for (const key of [...FRAMEWORK_SECTIONS, 'html', 'css']) {
     if (config[key]) {
       config[key].prefix = config.prefix;
       config[key].bindings = config.bindings;
+      config[key].formValue = config.formValue;
     }
   }
 

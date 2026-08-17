@@ -133,11 +133,27 @@ describe('strictFailures', () => {
     expect(strictFailures([d('unparsed-prop-declaration')])).toHaveLength(1);
   });
 
-  it('does not fail on a documented @prop with nothing behind it', () => {
-    // True, but it finds mixin-contributed props prism can't see — a backlog
-    // the consumer didn't create and can't clear. Report-only until runtime
-    // resolution lands in 2.x; promoted to strict in 3.0.0. See STRICT_CODES.
+  it('does not fail on a documented @prop read only from source', () => {
+    // Read from a file, "no declaration here" is not the claim it looks like:
+    // a mixin contributes properties the file cannot show, so the population is
+    // a backlog the consumer didn't create and can't clear.
     expect(strictFailures([d('doc-prop-undeclared')])).toEqual([]);
+  });
+
+  it('fails on the same finding when it was checked against the class', () => {
+    // With config.runtime on, prism read `Ctor.elementProperties` — mixins and
+    // base classes included — so a documented prop that isn't there is a stale
+    // tag and a one-line fix, not somebody else's backlog. Strictness follows
+    // the evidence, which is what finally made this promotable.
+    expect(strictFailures([{ ...d('doc-prop-undeclared'), strict: true }])).toHaveLength(1);
+  });
+
+  it('keeps the always-strict codes ahead of one that is strict by evidence', () => {
+    const out = strictFailures([
+      { ...d('doc-prop-undeclared'), strict: true },
+      d('unparsed-prop-declaration'),
+    ]);
+    expect(out.map((x) => x.code)).toEqual(['unparsed-prop-declaration', 'doc-prop-undeclared']);
   });
 });
 
@@ -152,8 +168,12 @@ describe('acknowledgeable codes', () => {
     expect(ACKNOWLEDGEABLE_CODES).not.toContain('unmatched-acknowledge');
   });
 
-  it('excludes report-only codes, which need no waiver', () => {
-    expect(ACKNOWLEDGEABLE_CODES).not.toContain('doc-prop-undeclared');
+  it('covers a code that is strict only sometimes', () => {
+    // `doc-prop-undeclared` fails when it was checked against the class. A code
+    // that can fail a build and cannot be acknowledged leaves no way out of a
+    // decision someone has already made, which is the position --strict exists
+    // to avoid.
+    expect(ACKNOWLEDGEABLE_CODES).toContain('doc-prop-undeclared');
   });
 });
 
