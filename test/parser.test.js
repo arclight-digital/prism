@@ -1315,6 +1315,15 @@ describe('documented type rejections name their cause', () => {
     expect(diagnostics[0].message).toContain('500-character limit');
   });
 
+  it('tells the author to unwrap a type written across multiple lines', () => {
+    // Wrapped for readability, as an author would: the verbatim brace text
+    // carries the comment's ` * ` continuation markers.
+    const { prop, diagnostics } = parse('{\n       *   id: string,\n       *   label: string,\n       * }');
+    expect(prop.docType).toBe('');
+    expect(diagnostics[0]).toMatchObject({ code: 'unusable-doc-type', reason: 'multi-line' });
+    expect(diagnostics[0].message).toContain('one line');
+  });
+
   it('names the offending characters when a type is unsafe', () => {
     const { prop, diagnostics } = parse('string; declare const x: number');
     expect(prop.docType).toBe('');

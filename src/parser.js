@@ -771,8 +771,20 @@ function applyDocTypes(props, source, warn, tag, unparsed = new Set()) {
 
     if (TRIVIAL_DOC_TYPES.has(typeText)) continue;
 
-    // Both rejections name the actual cause. "Can't emit safely" on its own
+    // All rejections name the actual cause. "Can't emit safely" on its own
     // sends you to the source to find out which rule you hit.
+    //
+    // Multi-line comes first: the braces' text is read verbatim, so a wrapped
+    // type arrives with the comment's ` * ` continuation markers embedded, and
+    // reporting that as "contains '*'" makes the reader decode the symptom.
+    if (/\n/.test(typeText)) {
+      warn(
+        'unusable-doc-type',
+        `${tag ?? 'component'} prop "${prop.name}" has a documented type written across multiple lines — prism reads the text between the braces verbatim, comment markers included. Keep the whole type on one line — falling back to ${prop.type}.`,
+        { tag, prop: prop.name, reason: 'multi-line' }
+      );
+      continue;
+    }
     if (typeText.length > MAX_DOC_TYPE) {
       warn(
         'unusable-doc-type',
