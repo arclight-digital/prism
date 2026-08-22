@@ -188,6 +188,8 @@ If two events carry the same key (a slider firing `arc-input` and `arc-change`),
 | Solid, Preact | — | nothing; no two-way binding form |
 | React | — | nothing; `@lit/react` wires properties and events itself |
 
+**A binding is only as good as the paths that announce.** Both derivations read what the component *says*, so a component that announces three of its four transitions looks fully compliant: prism sees the three, emits the binding, and the silent fourth is exactly the drift the binding exists to prevent. The reference catalog had one — a shell whose drawer closed four ways, three through a method that assigned and announced, the fourth a bare `this.sidebarOpen = false` on a resize past the breakpoint. Invisible while the prop was one-way, a stale `true` in the consumer's copy the moment it wasn't. Nothing in the source distinguishes that from a prop the component simply doesn't move, so if you own the component: every path that changes a shared prop announces it, or none of them should.
+
 The original event relay still fires in every case, so plain `@arc-input` handlers keep working alongside the binding. Only top-level `detail` keys count; a nested payload never produces a binding. An ambiguous dispatch answers nothing: a local assigned to two props before it is announced makes neither of them the prop the event is about.
 
 ### `config.bindings` — opt-outs

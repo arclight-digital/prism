@@ -1,5 +1,48 @@
 # Changelog
 
+## 3.1.1 — 2026-08-22
+
+### Fixed
+
+**`config.runtime` reported almost every component as driven by Lit's own
+internals.** 3.1.0 walks the prototype chain to find the methods a mixin
+contributes, and stopped at a prototype whose constructor is *named*
+`LitElement` or `ReactiveElement`. The build a plain `import()` resolves — the
+only kind the CLI ever loads — is minified: those names are `"i"` and `"g"`. So
+the walk ran straight through Lit's own prototype and stopped at `HTMLElement`,
+whose name survives because it is a platform global, collecting the two members
+of `ReactiveElement` that neither the `_` convention nor the `*Callback` suffix
+filters: `enableUpdating`, and `C`, a mangled private.
+
+The result in the reference catalog was a handle on **187 of 188 components in
+five packages**, each documented `/** The element, for the methods it is driven
+by: enableUpdating() and C(). */` — on components with no imperative API at all.
+Everything else 3.1.0 emitted was correct, including the 26 form controls that
+really do inherit `checkValidity()` and `reportValidity()`; the boundary was the
+only thing wrong.
+
+The boundary is now structural: the prototype that owns `requestUpdate`,
+`performUpdate` and `createRenderRoot` is the framework's, whatever it has been
+renamed to. Shape is the thing minification leaves alone.
+
+Two things about how this got out are worth recording, because neither is about
+Lit. **The test suite could not have caught it**: vitest resolves lit's
+`development` export condition, so the real package arrives in tests with its
+class names intact, and the CLI's own `import()` does not. A fixture now carries
+the minified *shape* rather than the package, since that is what the walk meets.
+And **`wrapper-missing-handle` cannot catch it either** — that check fails when
+a handle is missing, and this failure emits one everywhere, which reads as a
+check passing more thoroughly rather than a check failing. A verification that
+can only fail in one direction does not cover the other.
+
+**A walk that cannot find the boundary now answers nothing.** Reaching the end
+of the chain without recognizing the framework's prototype means the shape this
+relies on has changed, and everything collected on the way is suspect rather
+than complete. The component's own file is read instead — what prism did before
+3.1.0 — and the degradation is reported as `runtime-methods-unreadable` rather
+than absorbed, since mixin-contributed methods go missing again when it
+happens. It fails `--strict`, beside `runtime-unavailable`.
+
 ## 3.1.0 — 2026-08-22
 
 Two findings from the same report as 3.0.0's scope, raised again by an
