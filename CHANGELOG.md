@@ -1,5 +1,144 @@
 # Changelog
 
+## 3.1.0 — 2026-08-22
+
+Two findings from the same report as 3.0.0's scope, raised again by an
+application building on the wrappers rather than by any of the six package
+builds — which is the thing they have in common. Both failures are silent, both
+are on the consumer's side of a wrapper that compiles and renders, and neither
+needed a breaking change to fix.
+
+A third thing arrived with them: `npm run test:types` compiles the corpus's
+generated wrappers with each framework's own checker. It found two defects in
+its first two runs, and both are below.
+
+### Added
+
+**Two-way binding is derived from what a component does, not from what its prop
+is called.** A payload key matching a declared prop name was the only write-back
+path prism could see. So `arc-app-shell`, which closes its drawer on Escape, on
+a backdrop click and on navigation and announces each as `arc-sidebar-toggle`
+carrying the new state as `detail.value`, emitted `sidebarOpen` as a one-way
+property: a consumer's copy drifted the first time a user dismissed the drawer
+any way other than the hamburger, silently, in the direction that leaves a close
+button which reopens nothing.
+
+The second derivation is the behavioural one: **a prop the component assigns
+outside its constructor and then announces in an event is state it shares rather
+than receives**, whatever the payload calls it. Both halves are statically
+visible, and where they sit is what tells them apart — a constructor assignment
+is a default, the same assignment in a keydown handler is the component moving
+state its consumer also holds. Two spellings are read: `detail: { open:
+this.sidebarOpen }`, and `detail: { value }` dispatched from a method that
+assigns that local to exactly one prop. Ambiguity answers nothing: a local
+assigned to two props before it is announced makes neither of them the prop the
+event is about, and the search never leaves the method the dispatch is in.
+
+Name-keying could not see any of it, and would have kept needing new names — the
+same shape reaches `arc-tabs`' `selected`, `arc-pagination`'s `current`,
+`arc-stepper-nav`'s `active` and every `open`-like prop a dismiss path can move.
+Across the reference catalog of ~200 components, eight props on eight components
+gain a binding they never had, and one loses one — see below.
+
+**A component with public methods gets a handle on the element in every
+wrapper.** `arc-toast` is driven by methods — `show(options)` returns an id,
+`dismiss(id)` takes it back, plus `updateToast()`, `complete()` and `clear()` —
+and three of the six wrappers had no route to the element at all: Svelte's
+`bind:this` yields the Svelte component, a Vue template ref yields the SFC
+instance, an Angular template reference yields the wrapper class whose
+`ElementRef` is private to it. React was fine, because `@lit/react` forwards
+refs, which is why this was found in an application months after the wrappers
+shipped rather than in a build.
+
+The condition is mechanical, so it is applied rather than configured: prism now
+reads the class body for the methods a consumer calls — instance methods that
+aren't private by `#` or by the `_` convention, aren't static, and aren't called
+by Lit or the browser — and any component with one gets `element()` in Svelte,
+`defineExpose` in Vue, a public getter in Angular, a forwarded `ref` in Solid,
+and `forwardRef` in Preact. Typed as the element class, and nothing about the
+method surface is restated: the handle *is* the element, so prism has no
+signature to get wrong and nothing goes stale when a method is added.
+
+A subclass inherits its parent's methods along with its events, so an empty
+subclass of a component driven by `show()` gets the same handle. And with
+`config.runtime` on, the methods are read from the prototype chain rather than
+the file, which is the only way a mixin's are visible at all — `checkValidity()`
+and `reportValidity()`, declared once in a form-control mixin, are methods of
+every control built from it and of none of their files. The walk stops before
+`LitElement`, or every component would look driven by `requestUpdate()`.
+
+**`wrapper-missing-handle`**, beside the three checks that already read each
+wrapper back: a component with methods whose wrapper hands back no element.
+Fails `--strict`, like the others.
+
+### Changed
+
+**Where the two derivations disagree, the dispatch site wins.** They only
+disagree when the source is explicit, and the case is a real defect rather than
+a preference: a checkbox sending `detail: { value: this.checked }` while
+declaring `value` as the string a form submits is carrying the checked flag, and
+mirroring it onto `value` wrote a boolean into a string — cast into place by the
+generated wrapper and reported by nothing. Such a prop loses its binding, so a
+consumer holding `v-model:value` on a control shaped this way will see the
+`update:value` emit disappear. What it was carrying was never that prop's value.
+
+**Preact wrappers for method-driven components are `forwardRef` components**
+rather than plain `FunctionComponent`s, which is what lets a ref reach the
+element at all. Rendering is unchanged.
+
+**Most of the diff in a large catalog is form controls, not imperative APIs.**
+With `config.runtime` on, a mixin's methods are the component's methods, so
+`checkValidity()` and `reportValidity()` from a form-control mixin give every
+control a handle in five packages. That is correct — they are real public
+methods of those elements — but in the reference consumer it is roughly 27
+components' worth of handles arriving for a reason that has nothing to do with
+`arc-toast`, and it reads as a surprise in review unless you know.
+
+### Fixed
+
+**A Svelte wrapper imported `Snippet` when nothing declared one, and a Solid
+wrapper imported `JSX` the same way.** Both happen on a component with `@slot
+none`: no named-slot snippets, no `children`, and a type import with nothing
+left to refer to — which fails `tsc` and `svelte-check` under `noUnusedLocals`,
+on by default in the starter template both frameworks ship.
+
+In the reference catalog that is **70 of 188 wrappers in each of the two
+packages**, the same 70 components both times: exactly the `@slot none` set.
+And it is worse in those two packages than it would be anywhere else, because
+Svelte and Solid ship `src/` rather than `dist/` — their export maps point at
+source — so it is the *consumer's* compiler that reads these files, and
+`skipLibCheck` does not cover `.tsx` or `.svelte`. The packages themselves
+compile because nothing in that repo turns `noUnusedLocals` on over the wrapper
+trees, which is the whole shape of it: the file is checked by a config that
+cannot fail on it.
+
+Invisible from inside prism, since the wrapper is otherwise exactly right, and
+invisible to every string assertion in this repo. The Solid case defeats a
+grep as well — `declare module 'solid-js/jsx-runtime' { namespace JSX { … } }`
+puts the identifier in the file while the import stays dead. Found by the type
+check the moment it existed.
+
+### Testing
+
+**`npm run test:types` — the corpus, compiled by each framework's own checker.**
+`tsc` for React, Preact, Solid and Angular, `vue-tsc` for Vue, `svelte-check`
+for Svelte, against a stub of the element package built from the corpus metas so
+the wrappers' use of the element's own type is checked too. It is the only test
+here that asks what a consumer asks — does the file compile where it lands —
+and it is the first thing in this repo that could have caught either defect
+above without a 202-component catalog downstream.
+
+Each framework is checked twice: once against the generated tree, and once
+against a file with a deliberate type error, which it has to fail. That second
+run is not ceremony — the first working version of this harness put the tree
+under `node_modules/`, where svelte-check does not look, and it reported a clean
+pass on a file that could not compile. A checker that reads nothing and a
+checker that is happy print the same thing.
+
+Kept out of `npm test`: it needs six framework toolchains, and prism's
+dependency list is one package. CI installs them for that job alone, with
+`--no-save`, so nothing about the published package changes.
+
 ## 3.0.0 — 2026-08-16
 
 Scoped from `PRISM-3.md`, filed by `arc-ui` against 2.13.1. That document is not
