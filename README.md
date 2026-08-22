@@ -162,13 +162,23 @@ Each framework section (`react`, `vue`, `svelte`, `angular`, `solid`, `preact`) 
 5. **Enum values** from a documented `@prop` union, falling back to `:host([prop="value"])` CSS patterns plus the prop's default. Where both exist, disagreements are reported as `doc-drift`.
 6. **Prop types** from non-union `@prop` tags, emitted verbatim. The type must be self-contained — generated wrappers take no imports, so a type naming your own exported symbol is reported instead.
 7. **Template** from `render()`, with variable templates inlined and simple ternaries resolved against prop defaults.
-8. **Events** from `dispatchEvent(new CustomEvent(...))` calls, including each event's top-level `detail` keys.
-9. **Host display** from `:host { display: ... }` — decides the HTML snippet's wrapper element.
-10. **Interactivity level** — see below.
+8. **Events** from `dispatchEvent(new CustomEvent(...))` calls, including each event's top-level `detail` keys and which prop each key carries the new value of.
+9. **Public methods** from the class body — instance methods that aren't private (`_`/`#`), static, or called by Lit or the browser. With `config.runtime`, from the prototype chain instead, so a mixin's methods count too.
+10. **Host display** from `:host { display: ... }` — decides the HTML snippet's wrapper element.
+11. **Interactivity level** — see below.
 
 ## Two-way bindings
 
-A wrapper that only passes props down is write-only: the framework's copy of `value` never updates, and the next unrelated re-render re-sets the stale value onto the element. Prism derives the write-back path from a convention: **an event whose `detail` carries a key matching a declared prop name is that prop's write-back path.** If two events carry the same key (a slider firing `arc-input` and `arc-change`), both are listened to.
+A wrapper that only passes props down is write-only: the framework's copy of `value` never updates, and the next unrelated re-render re-sets the stale value onto the element. Prism derives the write-back path two ways, both read from the source:
+
+- **The key names the prop.** An event whose `detail` carries a key matching a declared prop name is that prop's write-back path — the convention most components already follow.
+- **The dispatch site says so.** A prop the component assigns *outside its constructor* and then announces in an event is state it shares rather than receives, whatever the payload calls it. `arc-sidebar-toggle` carrying `sidebarOpen` as `detail.value` is a binding; so is `detail: { value }` dispatched from `_setOpen(value) { this.open = value; … }`.
+
+The second is what a name-keyed rule cannot see, and the drift it prevents is silent: a drawer the component closes on Escape or on a backdrop click leaves the consumer's copy of `open` reading `true`, and a close button that reopens nothing.
+
+Where the two disagree, the dispatch site wins — they only disagree when the source is explicit. A checkbox sending `detail: { value: this.checked }` while declaring `value` as the string a form submits is carrying the checked flag, and mirroring it onto `value` writes a boolean into a string.
+
+If two events carry the same key (a slider firing `arc-input` and `arc-change`), both are listened to. A prop is announced by one key per event: where two keys carry the same prop, the one that names it outright is used.
 
 | Generator | Consumer writes | Prism emits |
 |---|---|---|
@@ -178,7 +188,7 @@ A wrapper that only passes props down is write-only: the framework's copy of `va
 | Solid, Preact | — | nothing; no two-way binding form |
 | React | — | nothing; `@lit/react` wires properties and events itself |
 
-The original event relay still fires in every case, so plain `@arc-input` handlers keep working alongside the binding. Only top-level `detail` keys count; a nested payload never produces a binding.
+The original event relay still fires in every case, so plain `@arc-input` handlers keep working alongside the binding. Only top-level `detail` keys count; a nested payload never produces a binding. An ambiguous dispatch answers nothing: a local assigned to two props before it is announced makes neither of them the prop the event is about.
 
 ### `config.bindings` — opt-outs
 
@@ -193,6 +203,8 @@ bindings: {
   'arc-copy-button': { exclude: ['value'] },
 },
 ```
+
+`exclude` names props, not detail keys — the prop is what the binding would write.
 
 Malformed entries throw at config load.
 
@@ -286,6 +298,25 @@ React and Preact take `key` and `ref` in the reconciler, so `<Column key="name" 
 ```js
 const name = col.field ?? col.key;   // React/Preact users pass `field`
 ```
+
+### Components driven by methods
+
+A component with a public method — `show()` returning an id, `dismiss(id)` taking it back, `edit()`, `next()`, `getCrop()` — needs its element reachable, and most frameworks hand back their own object instead: Svelte's `bind:this` yields the Svelte component, a Vue template ref yields the SFC instance, an Angular template reference yields the wrapper whose `ElementRef` is private to it. React is the exception, because `@lit/react` forwards refs already — which is why this surfaces in an application rather than in a package build.
+
+So a component with public methods gets a handle in every wrapper, typed as the element class:
+
+| Generator | Consumer writes | Reaches the element by |
+|---|---|---|
+| Svelte | `bind:this={toast}` | `toast.element()` — a function, because an instance `export` in runes mode captures its binding before the element exists |
+| Vue | `<Toast ref="toast" />` | `toast.value.element` — `defineExpose`, unwrapped on the way out |
+| Angular | `@ViewChild(Toast)` | `toast.element` |
+| Solid | `ref={el}` | `el` — the ref is forwarded to the element |
+| Preact | `ref={el}` | `el.current` — the component is wrapped in `forwardRef` |
+| React | `ref={el}` | `el.current` — already the case, nothing added |
+
+`element` yields to a prop of the same name (the handle becomes `_element`); in Solid, `ref` is the framework's own word and a component declaring a prop by that name keeps it and gets no handle.
+
+Nothing about the method surface is restated in the wrapper — the handle *is* the element, so everything the component declares stays reachable, and prism has no signature to get wrong.
 
 ### Angular reactive forms
 
@@ -387,13 +418,15 @@ runtime: { setup: './scripts/dom-shim.js' },
 
 **It's opt-in because reading the class means importing the module, and importing runs it** — a config file is the right place to say yes to that. Lit 3 carries its own DOM shim, so most projects need no `setup`; the option exists for components that touch a browser global at module scope. It degrades rather than fails: a module that throws on import costs that one component its runtime answer (reported as `runtime-unavailable`) and falls back to the source reader.
 
+`runtime` also answers for **methods**: `checkValidity()` contributed by a form-control mixin is a method of the element and of no file prism reads, and what a component's methods are is what decides whether its wrappers hand back a handle. The prototype chain is walked to the mixin and no further — stopping before `LitElement` and `HTMLElement`, or every component would look driven by `requestUpdate()` and `addEventListener()`.
+
 With `runtime` on, four things become unnecessary: mixin props are ordinary `elementProperties` entries, `config.propsFrom` and `config.formAssociated` are answered by the class itself, and `unparsed-prop-declaration` can't occur. A configured `propsFrom` still wins — it's explicit configuration — but is now checked against the class, and omissions are reported. Defaults, documented unions, and CSS-inferred enums still come from source and apply on top: the class knows what a property *is*; the file knows what the author said about it.
 
 ### What a subclass inherits
 
 `elementProperties` brings a subclass's property declarations back on its own. Nothing else flattens, because nothing else is data on the class — events, slots, template, and styles are statements in the base class's file, and so are defaults (constructor assignments) and documented unions (JSDoc). So prism links a component to the one it extends, by class identity through the prototype chain, and takes the rest from that component's own parse:
 
-- **Events and payloads** merge always — a subclass dispatches its own and its parent's, and the payload drives two-way bindings.
+- **Events, payloads, and methods** merge always — a subclass dispatches its parent's events and inherits its parent's methods, so an empty subclass of a component driven by `show()` is driven by `show()` too, and its wrappers owe the same handle.
 - **Defaults and documented types** merge always — `super()` runs whatever the base assigns, regardless of what the subclass renders.
 - **Template, styles, slots, and interactivity** transfer only when the subclass renders nothing of its own. A subclass with its own `render()` is describing its own surface and is believed.
 
@@ -522,13 +555,14 @@ Only files carrying prism's generated header are ever removed. Barrels are recon
 
 ### Wrapper verification
 
-After writing each wrapper, prism reads it back and checks three things, because each failure is invisible from every other direction — the file compiles, builds, and does nothing:
+After writing each wrapper, prism reads it back and checks four things, because each failure is invisible from every other direction — the file compiles, builds, and does nothing:
 
 - **It registers its element** (`wrapper-missing-register`). A type-only import of the element class gets elided by TypeScript, taking `customElements.define` with it; the wrapper then renders an unupgraded element whose prop assignments read back fine as expandos.
 - **It carries an outlet for the component's content** (`wrapper-missing-slot`) — the children outlet in React/Preact/Solid/Angular whenever any slot is declared, and a per-named-slot outlet in Svelte/Vue.
 - **A form control registers its accessor** (`wrapper-missing-accessor`, Angular only).
+- **A component driven by methods hands back the element** (`wrapper-missing-handle`) — everything such a component can do sits on the far side of that handle.
 
-All three fail `--strict`. A generated file that stops carrying its component's surface is a generator bug, so the check lives in the generator rather than in whatever repo consumes it.
+All four fail `--strict`. A generated file that stops carrying its component's surface is a generator bug, so the check lives in the generator rather than in whatever repo consumes it.
 
 ## CSS transformation
 

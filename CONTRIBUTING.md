@@ -16,6 +16,7 @@ npm install
 npm test           # Run tests once
 npm run test:watch # Run tests in watch mode
 npm run lint       # Run ESLint
+npm run test:types # Compile the corpus output with each framework's checker
 ```
 
 ## Making changes
@@ -38,11 +39,25 @@ Tests live in `test/` and use [vitest](https://vitest.dev/). Each source module 
 
 ### The corpus
 
-`test/fixtures/corpus/` holds component sources, and `test/corpus.test.js` runs every generator over all of them in one pass. Its members are not examples: each is a **shape that has broken** — a component whose slots are all named, a form-associated element, a dashed custom event, a barrel a formatter has wrapped — and each file says which failure it stands for. Generator unit tests build `meta` by hand, so they can only prove the generators did as they were told; the corpus is what catches the parser being wrong.
+`test/fixtures/corpus/` holds component sources, and `test/corpus.test.js` runs every generator over all of them in one pass. Its members are not examples: each is a **shape that has broken** — a component whose slots are all named, a form-associated element, a dashed custom event, a component that moves state its consumer also holds, one driven by its methods, a barrel a formatter has wrapped — and each file says which failure it stands for. Generator unit tests build `meta` by hand, so they can only prove the generators did as they were told; the corpus is what catches the parser being wrong.
 
 **If you fix a defect that a shape can stand for, add the shape.**
 
 `test/fixtures/runtime/` is the same idea for `config.runtime`, and needs real modules rather than source strings — a mixin contributing properties to a component in another file can only be tested by importing both. That is why `lit` is a devDependency.
+
+### The type check
+
+`npm run test:types` generates the corpus's wrappers and compiles them with each framework's own checker — `tsc` for React, Preact, Solid and Angular, `vue-tsc` for Vue, `svelte-check` for Svelte — against a stub of the element package built from the corpus metas. It is the only test here that asks the question a consumer asks: does the file compile where it lands. Two defects were found by its first two runs, both a type import that had stopped being used and neither visible to any string assertion.
+
+It needs six framework toolchains, which is why it is not part of `npm test` — nobody should install TypeScript, Vue, Svelte, Solid, Preact, React and Angular to fix a regex. CI runs it as its own job; to run it locally:
+
+```bash
+npm install --no-save typescript@5 vue vue-tsc svelte svelte-check \
+  solid-js preact react @types/react @lit/react @angular/core @angular/forms
+npm run test:types
+```
+
+Each framework is checked twice: once against the generated tree, and once against a file with a deliberate type error in it, which it has to fail. A checker reading no files reports the same clean exit as one that read them all — the first working version of this put the tree under `node_modules/`, where svelte-check does not look, and it passed a file that could not compile.
 
 ### The acceptance suite
 

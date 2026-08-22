@@ -22,3 +22,21 @@ jobs:
       - run: npm test
       - run: npm audit --omit=dev
       - run: npm pack --dry-run
+
+  # Compile the corpus's generated wrappers with each framework's own checker.
+  # Its own job because it needs six framework toolchains, and prism's runtime
+  # dependency list is one package — installed here with --no-save so nothing
+  # about the published package changes. See test/typecheck/run.js.
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: >
+          npm install --no-save
+          typescript@5 vue vue-tsc svelte svelte-check solid-js preact
+          react @types/react @lit/react @angular/core @angular/forms
+      - run: npm run test:types

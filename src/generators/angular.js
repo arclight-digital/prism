@@ -21,6 +21,7 @@ import { HEADER, claimOutput } from './header.js';
 import { tsType, projectsChildren } from './types.js';
 import { deriveBindings, boundPropNames } from './bindings.js';
 import { formBinding } from './form-control.js';
+import { needsHandle, methodPhrase, handleName } from './handles.js';
 import { registerImport } from './imports.js';
 
 /**
@@ -147,9 +148,9 @@ export function generateAngular(meta, config, root) {
   const register = registerImport(meta, config);
   const lines = [HEADER, ''];
 
-  // Two-way bindings, derived from event detail keys that match prop names.
-  // Angular's `[(x)]` desugars to `[x]` + `(xChange)`, so without the matching
-  // output the banana-in-a-box form doesn't compile at all.
+  // Two-way bindings — see deriveBindings for what makes a prop one. Angular's
+  // `[(x)]` desugars to `[x]` + `(xChange)`, so without the matching output the
+  // banana-in-a-box form doesn't compile at all.
   const twoWay = deriveBindings(meta, config);
   const boundProps = boundPropNames(twoWay);
   const propTypes = new Map(meta.props.map((p) => [p.name, tsType(p)]));
@@ -235,6 +236,17 @@ export function generateAngular(meta, config, root) {
   lines.push(`export class ${meta.pascalName}${cva ? ` implements ${iface}` : ''} {`);
   lines.push(`  private readonly _el: ${meta.className} = ${ngName.get('inject')}(${ngName.get('ElementRef')}).nativeElement;`);
 
+  // A template reference on this tag yields this wrapper, whose ElementRef is
+  // private to it, so a component driven by methods needs the element handed
+  // back deliberately.
+  if (needsHandle(meta, 'angular')) {
+    lines.push('');
+    lines.push(`  /** The element, for the methods it is driven by: ${methodPhrase(meta)}. */`);
+    lines.push(`  get ${handleName(meta)}(): ${meta.className} {`);
+    lines.push('    return this._el;');
+    lines.push('  }');
+  }
+
   // @Input() accessor pairs forwarding to the host element's properties. No
   // local defaults: an unbound input never fires the setter and the element
   // keeps its own default, so wrapper and element can't disagree.
@@ -262,9 +274,9 @@ export function generateAngular(meta, config, root) {
     lines.push(`  ${syncMethodName(event)}(event: CustomEvent) {`);
     lines.push(`    const detail = event.detail as Record<string, unknown> | null;`);
     lines.push('    if (!detail) return;');
-    for (const name of props) {
-      lines.push(`    if ('${name}' in detail) {`);
-      lines.push(`      this.${name}Change.emit(detail.${name} as ${propTypes.get(name)});`);
+    for (const { prop, key } of props) {
+      lines.push(`    if ('${key}' in detail) {`);
+      lines.push(`      this.${prop}Change.emit(detail.${key} as ${propTypes.get(prop)});`);
       lines.push('    }');
     }
     lines.push('  }');

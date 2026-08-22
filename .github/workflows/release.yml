@@ -21,6 +21,15 @@ jobs:
       - run: npm run lint
       - run: npm test
 
+      # The same check CI runs on every push, before the one action here that
+      # cannot be taken back. A wrapper that does not compile is the failure
+      # mode this whole package exists to avoid.
+      - run: >
+          npm install --no-save
+          typescript@5 vue vue-tsc svelte svelte-check solid-js preact
+          react @types/react @lit/react @angular/core @angular/forms
+      - run: npm run test:types
+
       # The tag is what triggers this, so it is worth one line to check it
       # names what is about to be published. A tag that has drifted from
       # package.json publishes a version nobody asked for, under a name nobody

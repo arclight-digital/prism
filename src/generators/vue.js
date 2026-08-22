@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { HEADER_HTML as HEADER, claimOutput } from './header.js';
 import { tsType, acceptsChildren, typedDefault } from './types.js';
 import { deriveBindings, boundPropNames, handlerName } from './bindings.js';
+import { needsHandle, methodPhrase, handleName } from './handles.js';
 import { registerImport } from './imports.js';
 
 /** Format a default value for Vue's withDefaults(). */
@@ -36,7 +37,16 @@ export function generateVue(meta, config, root) {
 
   // <script setup lang="ts">
   lines.push('<script setup lang="ts">');
-  lines.push(`import '${registerImport(meta, config)}';`);
+  const register = registerImport(meta, config);
+  lines.push(`import '${register}';`);
+  // The element itself has to be reachable from a component driven by methods:
+  // a template ref on this SFC yields the SFC instance, and `defineExpose` is
+  // the only thing that puts anything on it.
+  const handle = needsHandle(meta, 'vue');
+  if (handle) {
+    lines.push(`import { ref } from 'vue';`);
+    lines.push(`import type { ${meta.className} } from '${register}';`);
+  }
   lines.push('');
   lines.push(`defineOptions({ name: '${meta.pascalName}' });`);
   lines.push('');
@@ -78,9 +88,9 @@ export function generateVue(meta, config, root) {
     }
   }
 
-  // Two-way bindings, derived from event detail keys that match prop names.
-  // Without the matching `update:x` emit, `v-model:x` on the wrapper silently
-  // does nothing and every re-render re-sets the stale prop onto the element.
+  // Two-way bindings — see deriveBindings for what makes a prop one. Without
+  // the matching `update:x` emit, `v-model:x` on the wrapper silently does
+  // nothing and every re-render re-sets the stale prop onto the element.
   const twoWay = deriveBindings(meta, config);
   const boundProps = boundPropNames(twoWay);
   const propTypes = new Map(meta.props.map((p) => [p.name, tsType(p)]));
@@ -120,12 +130,22 @@ export function generateVue(meta, config, root) {
       lines.push(`  emit('${event}', payload);`);
       lines.push(`  const detail = payload.detail as Record<string, unknown> | null;`);
       lines.push('  if (detail) {');
-      for (const name of props) {
-        lines.push(`    if ('${name}' in detail) emit('update:${name}', detail.${name} as ${propTypes.get(name)});`);
+      for (const { prop, key } of props) {
+        lines.push(`    if ('${key}' in detail) emit('update:${prop}', detail.${key} as ${propTypes.get(prop)});`);
       }
       lines.push('  }');
       lines.push('}');
     }
+  }
+
+  if (handle) {
+    const name = handleName(meta);
+    lines.push('');
+    lines.push(`const __el = ref<${meta.className} | null>(null);`);
+    lines.push(`/** The element, for the methods it is driven by: ${methodPhrase(meta)}. */`);
+    // Exposed refs are unwrapped on the way out, so a consumer's template ref
+    // reads `.${name}` and has the element, not another ref.
+    lines.push(`defineExpose({ ${name}: __el });`);
   }
 
   lines.push('</script>');
@@ -141,7 +161,9 @@ export function generateVue(meta, config, root) {
       ? `    @${e}="${handlers.get(e)}"`
       : `    @${e}="(payload: CustomEvent) => emit('${e}', payload)"`
   ));
-  const allBindings = [...bindings, ...eventBindings];
+  // A string `ref` inside `<script setup>` binds to the setup variable of the
+  // same name — the form that works from Vue 3.0, unlike `useTemplateRef`.
+  const allBindings = [...bindings, ...eventBindings, ...(handle ? ['    ref="__el"'] : [])];
 
   if (allBindings.length > 0) {
     lines.push(`  <${meta.tag}`);

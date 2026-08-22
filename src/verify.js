@@ -13,6 +13,7 @@
  */
 
 import { acceptsChildren, projectsChildren } from './generators/types.js';
+import { needsHandle, methodPhrase, HANDLE_MARKER } from './generators/handles.js';
 
 /**
  * How each framework spells the two things a wrapper has to carry: an outlet
@@ -176,6 +177,44 @@ export function verifyAccessor(framework, content, binding) {
   // is the one part of the shape no alias can move.
   const marker = 'provide: NG_VALUE_ACCESSOR,';
   return content.includes(marker) ? null : marker;
+}
+
+/**
+ * Whether a component driven by methods still hands back the element.
+ *
+ * The third failure with the same shape as the two above: nothing objects. The
+ * wrapper compiles, renders and behaves, and the entire imperative API is
+ * simply unreachable through it — `bind:this` yields the Svelte component, a
+ * Vue template ref yields the SFC instance, an Angular template reference
+ * yields the wrapper whose ElementRef is private. Found by an application
+ * rather than by any of the six package builds, which is exactly why it is
+ * asserted here.
+ *
+ * @param {string} framework - one of VERIFIABLE
+ * @param {string} content - the generated file's contents
+ * @param {import('./parser.js').ComponentMeta} meta
+ * @returns {string|null} the marker that is missing, or null
+ */
+export function verifyHandle(framework, content, meta) {
+  if (!needsHandle(meta, framework)) return null;
+  const marker = HANDLE_MARKER[framework]?.(meta);
+  if (!marker) return null;
+  return content.includes(marker) ? null : marker;
+}
+
+/**
+ * Human-readable diagnostic for a wrapper that keeps the element to itself.
+ *
+ * @param {string} framework
+ * @param {import('./parser.js').ComponentMeta} meta
+ * @returns {string}
+ */
+export function describeMissingHandle(framework, meta) {
+  return (
+    `${meta.tag}: the generated ${framework} wrapper exposes no handle on the element, and the ` +
+    `component is driven by ${methodPhrase(meta)} — every one of those is unreachable through the ` +
+    'wrapper, with nothing to say so at build time. This is a prism bug, not a component one.'
+  );
 }
 
 /**

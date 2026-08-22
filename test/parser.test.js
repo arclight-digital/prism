@@ -1547,3 +1547,166 @@ describe('slotsInMarkup separates seen from documented', () => {
     expect(meta.slotsInMarkup).toEqual(['header']);
   });
 });
+
+describe('the prop an event announces', () => {
+  const parse = (body, tag = 'arc-drawer') => parseComponent(
+    `/** @tag ${tag} */\n export class ArcDrawer extends LitElement {\n${body}\n}`,
+    '/project/src/navigation/drawer.js',
+    prefix,
+  );
+
+  it('reads a payload that names the prop outright', () => {
+    const meta = parse(`
+      static properties = { open: { type: Boolean } };
+      constructor() { super(); this.open = false; }
+      _close() {
+        this.open = false;
+        this.dispatchEvent(new CustomEvent('arc-toggle', { detail: { open: this.open } }));
+      }
+    `);
+    expect(meta.eventWrites['arc-toggle']).toEqual({ open: 'open' });
+  });
+
+  it('reads a payload that names the argument the prop was assigned from', () => {
+    // The shape a name-keyed rule cannot see: the key is `value` and the prop
+    // is `open`, and the assignment beside the dispatch is what ties them.
+    const meta = parse(`
+      static properties = { open: { type: Boolean } };
+      constructor() { super(); this.open = false; }
+      _setOpen(value) {
+        this.open = value;
+        this.dispatchEvent(new CustomEvent('arc-toggle', { detail: { value } }));
+      }
+    `);
+    expect(meta.eventWrites['arc-toggle']).toEqual({ value: 'open' });
+  });
+
+  it('says nothing about a prop the component only ever receives', () => {
+    // Half the rule is the assignment: a component that never writes the prop
+    // is not sharing that state, it is being told it.
+    const meta = parse(`
+      static properties = { open: { type: Boolean } };
+      constructor() { super(); this.open = false; }
+      _announce() {
+        this.dispatchEvent(new CustomEvent('arc-toggle', { detail: { value: this.open } }));
+      }
+    `);
+    expect(meta.eventWrites['arc-toggle']).toBeUndefined();
+  });
+
+  it('does not count a constructor assignment as the component moving state', () => {
+    const meta = parse(`
+      static properties = { open: { type: Boolean } };
+      constructor() {
+        super();
+        this.open = false;
+        this.dispatchEvent(new CustomEvent('arc-toggle', { detail: { value: this.open } }));
+      }
+    `);
+    expect(meta.eventWrites['arc-toggle']).toBeUndefined();
+  });
+
+  it('refuses an ambiguous local, rather than picking one of the props', () => {
+    const meta = parse(`
+      static properties = { open: { type: Boolean }, expanded: { type: Boolean } };
+      constructor() { super(); this.open = false; this.expanded = false; }
+      _setOpen(value) {
+        this.open = value;
+        this.expanded = value;
+        this.dispatchEvent(new CustomEvent('arc-toggle', { detail: { value } }));
+      }
+    `);
+    expect(meta.eventWrites['arc-toggle']).toBeUndefined();
+  });
+
+  it('looks no further than the method the dispatch is in', () => {
+    // A `value` assigned to a prop somewhere else in the class is not this
+    // event's write-back path, and searching the whole class would find it.
+    const meta = parse(`
+      static properties = { open: { type: Boolean }, label: { type: String } };
+      constructor() { super(); this.open = false; }
+      _rename(value) { this.label = value; }
+      _pulse(value) {
+        this.dispatchEvent(new CustomEvent('arc-toggle', { detail: { value } }));
+      }
+    `);
+    expect(meta.eventWrites['arc-toggle']).toBeUndefined();
+  });
+
+  it('keeps the dispatch site that answers over one that sends a literal', () => {
+    const meta = parse(`
+      static properties = { open: { type: Boolean } };
+      constructor() { super(); this.open = false; }
+      _setOpen(value) {
+        this.open = value;
+        this.dispatchEvent(new CustomEvent('arc-toggle', { detail: { value } }));
+      }
+      _reset() {
+        this.dispatchEvent(new CustomEvent('arc-toggle', { detail: { value: false } }));
+      }
+    `);
+    expect(meta.eventWrites['arc-toggle']).toEqual({ value: 'open' });
+  });
+});
+
+describe('the methods a consumer calls', () => {
+  const parse = (body) => parseComponent(
+    `/** @tag arc-notice */\n export class ArcNotice extends LitElement {\n${body}\n}`,
+    '/project/src/content/notice.js',
+    prefix,
+  );
+
+  it('is the public instance methods, in declaration order', () => {
+    const meta = parse(`
+      show(options = {}) { return 1; }
+      dismiss(id) {}
+      clear() {}
+    `);
+    expect(meta.methods).toEqual(['show', 'dismiss', 'clear']);
+  });
+
+  it('skips what the browser and Lit call, and what the component keeps to itself', () => {
+    const meta = parse(`
+      static create() {}
+      constructor() { super(); }
+      connectedCallback() {}
+      formResetCallback() {}
+      firstUpdated() {}
+      requestUpdate() {}
+      _present(entry) {}
+      #enqueue(entry) {}
+      show() {}
+      render() { return html\`<slot></slot>\`; }
+    `);
+    expect(meta.methods).toEqual(['show']);
+  });
+
+  it('does not mistake an accessor for one', () => {
+    // A getter/setter pair is a property; nothing about it needs an element
+    // handle that the generated prop binding doesn't already give.
+    const meta = parse(`
+      get value() { return this._value; }
+      set value(v) { this._value = v; }
+      commit() {}
+    `);
+    expect(meta.methods).toEqual(['commit']);
+  });
+
+  it('survives a class body of template literals, comments and nested objects', () => {
+    // Template literals, an apostrophe in a comment, a nested object in a field:
+    // the scan steps over all three, and reading any of them as a member
+    // boundary would put a method's body inside the constructor's range.
+    const meta = parse(`
+      static styles = css\`:host { display: block; } .stack { gap: 4px; }\`;
+      static properties = { position: { type: String, reflect: true } };
+      constructor() {
+        super();
+        // the stack's own position, not the consumer's
+        this.position = 'top-right';
+      }
+      show() { return \`\${this.position} { }\`; }
+      render() { return html\`<div class="stack">{}</div>\`; }
+    `);
+    expect(meta.methods).toEqual(['show']);
+  });
+});

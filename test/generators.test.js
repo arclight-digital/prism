@@ -14,6 +14,7 @@ import { isPrismGenerated } from '../src/generators/header.js';
 import { sweepOrphans } from '../src/generators/prune.js';
 import { pruneBarrels } from '../src/generators/barrel.js';
 import { reservedCollisions } from '../src/generators/identifiers.js';
+import { verifyHandle, describeMissingHandle } from '../src/verify.js';
 
 /** @type {import('../src/parser.js').ComponentMeta} */
 const meta = {
@@ -1405,5 +1406,78 @@ describe('children where there is somewhere to put them', () => {
     const c = readFileSync(generateSvelte(unknown, config('out/ns-u'), tmpDir).path, 'utf-8');
     expect(c).toContain('children?: Snippet;');
     expect(c).toContain('{@render children?.()}');
+  });
+});
+
+describe('the element handle', () => {
+  const read = (result) => readFileSync(result.path, 'utf-8');
+  /** The same component, driven by methods rather than by props. */
+  const driven = { ...meta, methods: ['show', 'dismiss'] };
+
+  it('is not emitted for a component with no methods', () => {
+    // Every component gaining an exported accessor it has no use for would be
+    // noise in 200 files, and noise is what stops a diff being read.
+    expect(read(generateSvelte(meta, config('out/h-none-sv'), tmpDir)))
+      .not.toContain('export function element');
+    expect(read(generateVue(meta, config('out/h-none-v'), tmpDir)))
+      .not.toContain('defineExpose');
+    expect(read(generateSolid(meta, config('out/h-none-so'), tmpDir)))
+      .not.toContain('ref?:');
+  });
+
+  it('names the methods it is there for', () => {
+    // The comment is the discovery path: the handle is on the component, and
+    // what to call on it is on the element.
+    expect(read(generateSvelte(driven, config('out/h-doc-sv'), tmpDir)))
+      .toContain('the methods it is driven by: show() and dismiss()');
+    expect(read(generateAngular(driven, config('out/h-doc-a'), tmpDir)))
+      .toContain('the methods it is driven by: show() and dismiss()');
+  });
+
+  it('yields the name to a prop that already has it', () => {
+    // The prop is the component's own API; the handle is prism's addition, and
+    // two members of one name is a file that does not compile.
+    const collides = {
+      ...driven,
+      props: [...meta.props, { name: 'element', type: 'String', default: '', reflect: false, values: [] }],
+    };
+    const svelte = read(generateSvelte(collides, config('out/h-clash-sv'), tmpDir));
+    expect(svelte).toContain('export function _element(): ArcButton | undefined {');
+    expect(svelte).toContain('element?: string;');
+    expect(read(generateAngular(collides, config('out/h-clash-a'), tmpDir)))
+      .toContain('get _element(): ArcButton {');
+  });
+
+  it('leaves `ref` to a component that declares one, since Solid has no other word', () => {
+    const collides = {
+      ...driven,
+      props: [...meta.props, { name: 'ref', type: 'String', default: '', reflect: false, values: [] }],
+    };
+    const content = read(generateSolid(collides, config('out/h-ref-so'), tmpDir));
+    expect(content).toContain('ref?: string;');
+    expect(content).not.toContain('(el: ArcButton) => void');
+    // And the verifier agrees, rather than reporting a wrapper prism decided
+    // not to emit.
+    expect(verifyHandle('solid', content, collides)).toBe(null);
+  });
+
+  it('gives Preact the ref hook without the listener hook, on a component with no events', () => {
+    // The import list is exact: `noUnusedLocals` is on in the template every
+    // Preact consumer starts from, so an unused hook import fails the build.
+    const quiet = { ...driven, events: [] };
+    const content = read(generatePreact(quiet, config('out/h-quiet-p'), tmpDir));
+    expect(content).toContain("import { useImperativeHandle, useRef } from 'preact/hooks';");
+    expect(content).not.toContain('useLayoutEffect');
+    expect(content).not.toContain('FunctionComponent');
+    expect(verifyHandle('preact', content, quiet)).toBe(null);
+  });
+
+  it('is reported as missing when a wrapper comes out without one', () => {
+    // The check exists because this failure is silent from every direction that
+    // isn't the file itself — the wrapper compiles, renders and behaves.
+    const svelte = read(generateSvelte(meta, config('out/h-miss-sv'), tmpDir));
+    expect(verifyHandle('svelte', svelte, driven))
+      .toBe('export function element(): ArcButton | undefined {');
+    expect(describeMissingHandle('svelte', driven)).toContain('show() and dismiss()');
   });
 });

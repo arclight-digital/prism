@@ -103,6 +103,7 @@ export const STRICT_CODES = [
   // nothing renders an inert element.
   'wrapper-missing-register',
   'wrapper-missing-accessor',
+  'wrapper-missing-handle',
   'wrapper-missing-slot',
   'exports-target-missing',
   'exports-subpath-collision',

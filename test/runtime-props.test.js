@@ -64,6 +64,23 @@ describe('resolveRuntimeProps', () => {
     expect(runtime.get(INPUT).classes.get('ArcInput').formAssociated).toBe(true);
   });
 
+  it('sees the methods a mixin contributed, and stops at the platform', () => {
+    // Same shape as `readonly` one line up: real methods of every element built
+    // from this mixin, in a file the component's own source never shows. The
+    // walk stops before LitElement, or every wrapper would be told the
+    // component is driven by `addEventListener` and `requestUpdate`.
+    const methods = runtime.get(INPUT).classes.get('ArcInput').methods;
+    expect(methods).toEqual(['checkValidity', 'reportValidity']);
+  });
+
+  it('takes the methods the class has over the ones its file shows', () => {
+    // Read from source this component has none, so its Svelte, Vue, Angular,
+    // Solid and Preact wrappers would hand back no element to call them on.
+    expect(parse(INPUT).methods).toEqual([]);
+    expect(parse(INPUT, { runtime: runtime.get(INPUT) }).methods)
+      .toEqual(['checkValidity', 'reportValidity']);
+  });
+
   it('reports a module that will not import, and keeps going', () => {
     // One file's failure costs that file its runtime answer and nothing more.
     const findings = [];

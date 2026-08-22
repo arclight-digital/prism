@@ -9,6 +9,7 @@ import { HEADER_HTML as HEADER, claimOutput } from './header.js';
 import { tsType, passthroughMembers, acceptsChildren, typedDefault } from './types.js';
 import { deriveBindings, boundPropNames, handlerName } from './bindings.js';
 import { localNames, slotSnippetNames, mixedCaseProps } from './identifiers.js';
+import { needsHandle, methodPhrase, handleName } from './handles.js';
 import { registerImport } from './imports.js';
 
 /** Format a default value for Svelte destructuring. */
@@ -36,17 +37,29 @@ export function generateSvelte(meta, config, root) {
   const lines = [HEADER];
 
   // <script lang="ts">
-  lines.push('<script lang="ts">');
-  lines.push(`  import '${registerImport(meta, config)}';`);
-  lines.push(`  import type { Snippet } from 'svelte';`);
-  lines.push('');
-
   // One snippet prop per named slot — a slot the wrapper doesn't declare and
   // render renders nowhere, silently, with a clean build. Rendered bare, with
   // no carrier element, so `::slotted()` rules and slot layout still see the
   // real content; the consequence is that the `slot` attribute has to be on
   // the consumer's own element, where a `{#snippet}` body leaves it intact.
   const slotSnippets = slotSnippetNames(meta.slots ?? [], meta.props);
+  // Only when there is somewhere to put them — see acceptsChildren.
+  const takesChildren = acceptsChildren(meta);
+
+  lines.push('<script lang="ts">');
+  const register = registerImport(meta, config);
+  lines.push(`  import '${register}';`);
+  // The element's own type, for the handle below — the methods a consumer calls
+  // through it are declared on the class, not on anything prism emits.
+  const handle = needsHandle(meta, 'svelte');
+  if (handle) lines.push(`  import type { ${meta.className} } from '${register}';`);
+  // Both members that name `Snippet` are conditional, so the import is too: an
+  // unused type import fails `svelte-check` under `noUnusedLocals`, and a
+  // component with `@slot none` declares neither member.
+  if (slotSnippets.size > 0 || takesChildren) {
+    lines.push(`  import type { Snippet } from 'svelte';`);
+  }
+  lines.push('');
 
   // Props interface
   lines.push('  interface Props {');
@@ -57,14 +70,12 @@ export function generateSvelte(meta, config, root) {
     lines.push(`    /** <slot name="${slot}"> — put slot="${slot}" on the element inside. */`);
     lines.push(`    ${ident}?: Snippet;`);
   }
-  // Only when there is somewhere to put them — see acceptsChildren.
-  const takesChildren = acceptsChildren(meta);
   if (takesChildren) lines.push('    children?: Snippet;');
   lines.push(...passthroughMembers(meta.props, '    ', slotSnippets.values()));
   lines.push('  }');
   lines.push('');
 
-  // Two-way bindings, derived from event detail keys that match prop names.
+  // Two-way bindings — see deriveBindings for what makes a prop one.
   const bindings = deriveBindings(meta, config);
   const boundProps = boundPropNames(bindings);
   const propTypes = new Map(meta.props.map((p) => [p.name, tsType(p)]));
@@ -102,9 +113,11 @@ export function generateSvelte(meta, config, root) {
   // mixedCaseProps) — set as properties instead, and left out of the template
   // below so no dead attribute is emitted alongside.
   const viaProperty = mixedCaseProps(meta.props);
-  if (viaProperty.length > 0) {
+  if (viaProperty.length > 0 || handle) {
     lines.push('');
     lines.push('  let __el: HTMLElement | undefined = $state();');
+  }
+  if (viaProperty.length > 0) {
     lines.push('  $effect(() => {');
     lines.push('    const el = __el as unknown as Record<string, unknown> | undefined;');
     lines.push('    if (!el) return;');
@@ -115,6 +128,27 @@ export function generateSvelte(meta, config, root) {
       lines.push(`    if (${local} !== undefined) el.${prop.name} = ${local};`);
     }
     lines.push('  });');
+  }
+
+  // The element itself. `bind:this` on this component yields the component, so
+  // without this there is no route to the element at all — and every method the
+  // component is driven by lives on it.
+  if (handle) {
+    const name = handleName(meta);
+    lines.push('');
+    lines.push(`  /**`);
+    lines.push(`   * The element, for the methods it is driven by: ${methodPhrase(meta)}.`);
+    lines.push(`   *`);
+    lines.push(`   * A function rather than a property: an instance \`export\` in runes mode`);
+    lines.push(`   * captures its binding once, which would be before the element exists.`);
+    lines.push(`   * Reach it with \`bind:this\` on this component, then \`${name}()\`.`);
+    lines.push(`   */`);
+    lines.push(`  export function ${name}(): ${meta.className} | undefined {`);
+    // `bind:this` on a tag Svelte has no entry for types as HTMLElement, so the
+    // narrowing happens here rather than on the binding, where it would be an
+    // error rather than a cast.
+    lines.push(`    return __el as ${meta.className} | undefined;`);
+    lines.push(`  }`);
   }
 
   // Binding handlers. Without these the wrapper is write-only: Svelte's copy
@@ -133,8 +167,8 @@ export function generateSvelte(meta, config, root) {
       lines.push(`  function ${fn}(e: Event) {`);
       lines.push(`    const detail = (e as CustomEvent).detail as Record<string, unknown> | null;`);
       lines.push('    if (detail) {');
-      for (const name of props) {
-        lines.push(`      if ('${name}' in detail) ${locals.get(name)} = detail.${name} as ${propTypes.get(name)};`);
+      for (const { prop, key } of props) {
+        lines.push(`      if ('${key}' in detail) ${locals.get(prop)} = detail.${key} as ${propTypes.get(prop)};`);
       }
       lines.push('    }');
       lines.push(`    (rest['on${event}'] as ((e: Event) => void) | undefined)?.(e);`);
@@ -152,7 +186,7 @@ export function generateSvelte(meta, config, root) {
   const attrList = meta.props
     .filter((p) => !byProperty.has(p.name))
     .map((p) => (renamed(p.name) ? `${p.name}={${locals.get(p.name)}}` : `{${p.name}}`));
-  if (viaProperty.length > 0) attrList.push('bind:this={__el}');
+  if (viaProperty.length > 0 || handle) attrList.push('bind:this={__el}');
   const attrs = attrList.join(' ');
   const attrStr = attrs ? ` ${attrs} {...rest}` : ' {...rest}';
 

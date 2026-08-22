@@ -7,6 +7,7 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { HEADER, claimOutput } from './header.js';
 import { tsType, passthroughMembers, projectsChildren } from './types.js';
+import { needsHandle, methodPhrase } from './handles.js';
 import { registerImport } from './imports.js';
 
 /**
@@ -39,8 +40,20 @@ export function generateSolid(meta, config, root) {
 
   const lines = [HEADER, ''];
 
-  lines.push(`import { splitProps, type Component, type JSX } from 'solid-js';`);
-  lines.push(`import '${registerImport(meta, config)}';`);
+  // `JSX` is imported only where the children member below uses it: an unused
+  // type import fails `tsc` under `noUnusedLocals`, which is on in the template
+  // every Solid consumer starts from — and a component with `@slot none` has no
+  // children member at all.
+  const takesChildren = projectsChildren(meta);
+  lines.push(
+    takesChildren
+      ? `import { splitProps, type Component, type JSX } from 'solid-js';`
+      : `import { splitProps, type Component } from 'solid-js';`
+  );
+  const register = registerImport(meta, config);
+  lines.push(`import '${register}';`);
+  const handle = needsHandle(meta, 'solid');
+  if (handle) lines.push(`import type { ${meta.className} } from '${register}';`);
   lines.push('');
 
   // Solid's JSX has no IntrinsicElements entry for custom elements, so the tag
@@ -75,8 +88,14 @@ export function generateSolid(meta, config, root) {
   // the `{local.children}` below there is nowhere for a consumer's
   // `<div slot="logo">` to go — it doesn't type-check, and if it did it would
   // render nothing.
-  const takesChildren = projectsChildren(meta);
   if (takesChildren) lines.push('  children?: JSX.Element;');
+  if (handle) {
+    lines.push(`  /** The element, for the methods it is driven by: ${methodPhrase(meta)}. */`);
+    // Both spellings: Solid compiles `ref={el}` at the call site into a setter
+    // function, so what arrives is always callable — but what the consumer
+    // wrote, and what has to type-check, is the variable.
+    lines.push(`  ref?: ${meta.className} | ((el: ${meta.className}) => void);`);
+  }
   lines.push(...passthroughMembers(meta.props, '  '));
   lines.push('}');
   lines.push('');
@@ -88,6 +107,7 @@ export function generateSolid(meta, config, root) {
     propNames.push(`'${eventToHandlerName(event)}'`);
   }
   if (takesChildren) propNames.push(`'children'`);
+  if (handle) propNames.push(`'ref'`);
 
   // Solid's `prop:` namespace sets a property rather than an attribute, which is
   // the only way a name that changes under lowercasing can reach the element —
@@ -100,7 +120,13 @@ export function generateSolid(meta, config, root) {
   const eventAttrs = meta.events.map(
     (e) => `on:${e}={local.${eventToHandlerName(e)}}`
   );
-  const bound = [...propAttrs, ...eventAttrs].join(' ');
+  // Forwarded through a function rather than as `ref={local.ref}`: Solid's
+  // element ref assigns to the expression when it isn't callable, and `local`
+  // is a read-only view of props.
+  const refAttr = handle
+    ? [`ref={(el: ${meta.className}) => { if (typeof local.ref === 'function') local.ref(el); }}`]
+    : [];
+  const bound = [...propAttrs, ...eventAttrs, ...refAttr].join(' ');
   const attrStr = bound ? ` ${bound} {...rest}` : ' {...rest}';
 
   lines.push(`export const ${meta.pascalName}: Component<${meta.pascalName}Props> = (props) => {`);

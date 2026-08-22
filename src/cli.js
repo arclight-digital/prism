@@ -30,6 +30,7 @@ import { reservedCollisions, slotSnippetNames } from './generators/identifiers.j
 import {
   verifyWrapper, describeMissing, verifyRegistration, describeMissingRegister,
   verifyAccessor, describeMissingAccessor,
+  verifyHandle, describeMissingHandle,
 } from './verify.js';
 import { registerImport } from './generators/imports.js';
 import { VERSION } from './generators/header.js';
@@ -363,6 +364,18 @@ function processFile(filePath, config) {
         tag: meta.tag,
         framework,
         marker: accessor,
+      });
+    }
+
+    const handle = verifyHandle(framework, content, meta);
+    if (handle) {
+      diagnostics.push({
+        code: 'wrapper-missing-handle',
+        message: describeMissingHandle(framework, meta),
+        file: result.path,
+        tag: meta.tag,
+        framework,
+        marker: handle,
       });
     }
 
@@ -803,6 +816,7 @@ function flushDiagnostics(config) {
     'wrapper-missing-register': 'generated wrappers that never register their element — inert at runtime',
     'wrapper-missing-slot': 'generated wrappers missing an outlet the component declares',
     'wrapper-missing-accessor': 'form controls whose Angular wrapper lost its ControlValueAccessor',
+    'wrapper-missing-handle': 'components driven by methods whose wrapper hands back no element',
     'exports-target-missing': 'exports-map subpaths pointing at files that do not exist',
     'exports-subpath-collision': 'components whose names want the same package subpath',
     'jsx-types-not-written': 'configured JSX declaration files something else already owns',

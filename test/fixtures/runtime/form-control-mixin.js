@@ -11,7 +11,8 @@ import { LitElement } from 'lit';
  *
  * `formAssociated` is here for the same reason — the static that decides which
  * Angular wrappers get a ControlValueAccessor is set by the mixin, not the
- * component.
+ * component. So are `checkValidity()` and `reportValidity()`: methods of every
+ * element built from this, and of no file that declares one.
  */
 export const FormControlMixin = (Base) => class extends Base {
   static formAssociated = true;
@@ -21,6 +22,19 @@ export const FormControlMixin = (Base) => class extends Base {
     required: { type: Boolean, reflect: true },
     readonly: { type: Boolean, reflect: true },
   };
+
+  /** The same shape one level up: methods no reader of the component's own file finds. */
+  checkValidity() {
+    return !this.required || Boolean(this.value);
+  }
+
+  reportValidity() {
+    return this.checkValidity();
+  }
+
+  _internalState() {
+    return { touched: false };
+  }
 };
 
 /** A plain base, so the fixtures can also cover the un-mixed case. */

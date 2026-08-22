@@ -10,10 +10,21 @@
 /**
  * Derive two-way bindings for a component.
  *
- * A prop is bindable when some event's `detail` carries a key of the same name
- * — that key *is* the element's write-back path. No hardcoded table: the
- * convention (`detail.value` ↔ `value`, `detail.checked` ↔ `checked`) is what
- * the components already follow.
+ * Two things make a payload a prop's write-back path, and the second is the
+ * one a table of names cannot reach:
+ *
+ *   - the key names the prop (`detail.value` ↔ `value`), the convention the
+ *     components already follow; or
+ *   - the dispatch site shows the key carrying that prop's new value, which is
+ *     what `eventWrites` records — `arc-sidebar-toggle` announcing `sidebarOpen`
+ *     as `detail.value` is the component moving state its consumer holds a copy
+ *     of, and the consumer's copy drifts the first time a backdrop click closes
+ *     the drawer.
+ *
+ * Behaviour outranks the name where they disagree, because they only disagree
+ * when the source is explicit: `detail: { value: this.checked }` on a checkbox
+ * whose `value` is the string a form submits carries the checked flag, and
+ * mirroring it onto `value` writes a boolean into a string.
  *
  * Where two events carry the same key — a slider firing both `arc-input` and
  * `arc-change` — both are listened to, so a binding tracks the live drag as
@@ -21,7 +32,8 @@
  *
  * @param {import('../parser.js').ComponentMeta} meta
  * @param {object} [config] - framework config section, for `bindings` overrides
- * @returns {Map<string, string[]>} event name → prop names it writes back
+ * @returns {Map<string, Array<{ prop: string, key: string }>>} event name → the
+ *   props it writes back, each with the detail key carrying the value
  */
 export function deriveBindings(meta, config = {}) {
   const byEvent = new Map();
@@ -30,21 +42,32 @@ export function deriveBindings(meta, config = {}) {
   const propNames = new Set(meta.props.map((p) => p.name));
 
   for (const [event, keys] of Object.entries(meta.eventDetails ?? {})) {
-    // Sort for stable output: detail keys arrive in dispatch order, which
+    const writes = meta.eventWrites?.[event] ?? {};
+    const byProp = new Map();
+    for (const key of keys) {
+      const prop = writes[key] ?? key;
+      if (!propNames.has(prop) || excluded.has(prop)) continue;
+      // Where two keys of one payload carry the same prop, the one that names
+      // it outright is the plainer write-back path; otherwise the first wins.
+      if (byProp.has(prop) && key !== prop) continue;
+      byProp.set(prop, { prop, key });
+    }
+    // Sorted for stable output: detail keys arrive in dispatch order, which
     // shifts whenever the component is edited.
-    const bound = keys.filter((k) => propNames.has(k) && !excluded.has(k)).sort();
-    if (bound.length > 0) byEvent.set(event, bound);
+    if (byProp.size > 0) {
+      byEvent.set(event, [...byProp.values()].sort((a, b) => (a.prop < b.prop ? -1 : a.prop > b.prop ? 1 : 0)));
+    }
   }
   return byEvent;
 }
 
 /**
  * The set of prop names any event writes back.
- * @param {Map<string, string[]>} bindings
+ * @param {Map<string, Array<{ prop: string, key: string }>>} bindings
  * @returns {Set<string>}
  */
 export function boundPropNames(bindings) {
-  return new Set([...bindings.values()].flat());
+  return new Set([...bindings.values()].flat().map((b) => b.prop));
 }
 
 /**

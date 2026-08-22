@@ -11,11 +11,14 @@ export default {
   // Ignore patterns
   ignore: ['**/shared-styles.js', '**/index.js', '**/icon-registry.js', '**/icon-library.js', '**/icons/**', '**/*.register.js', '**/register.js'],
 
-  // Two-way binding opt-outs. Bindings are derived by convention: an event
-  // whose `detail` carries a key matching a declared prop name is that prop's
-  // write-back path. List the exceptions here — cases where the key means
-  // something other than the prop it shares a name with, or where the element
-  // only echoes its own unchanged value back.
+  // Two-way binding opt-outs. Bindings are derived two ways: an event whose
+  // `detail` carries a key matching a declared prop name is that prop's
+  // write-back path, and so is a payload the dispatch site shows carrying the
+  // new value of a prop the component assigns outside its constructor — which
+  // is how `detail.value` announcing `sidebarOpen` is found. List the
+  // exceptions here, by prop name: cases where the key means something other
+  // than the prop it shares a name with, or where the element only echoes its
+  // own unchanged value back.
   bindings: {
     // detail.label is the *selected option's* text, not the field's own label
     'arc-select': { exclude: ['label'] },

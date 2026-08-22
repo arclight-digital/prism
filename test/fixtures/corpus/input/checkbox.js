@@ -9,6 +9,11 @@ import { LitElement, html, css } from 'lit';
  * stale silently when a 28th control is added, and the accessor disagreeing with
  * the `@Input` beside it is not something any type check would catch.
  *
+ * Its payload is also the case where a prop's *name* is the wrong answer:
+ * `detail.value` here is the checked flag, while `value` is the string a form
+ * submits. Mirroring the key onto the prop of the same name wrote a boolean
+ * into a string, cast into place by the wrapper and reported by nothing.
+ *
  * @tag arc-checkbox
  */
 export class ArcCheckbox extends LitElement {
@@ -31,7 +36,9 @@ export class ArcCheckbox extends LitElement {
 
   _toggle() {
     this.checked = !this.checked;
-    this.dispatchEvent(new CustomEvent('arc-change', { detail: { checked: this.checked } }));
+    this.dispatchEvent(
+      new CustomEvent('arc-change', { detail: { value: this.checked, checked: this.checked } }),
+    );
   }
 
   render() {

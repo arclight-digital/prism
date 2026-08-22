@@ -23,6 +23,7 @@ export default [
         customElements: 'readonly',
         CustomEvent: 'readonly',
         HTMLElement: 'readonly',
+        setTimeout: 'readonly',
       },
     },
   },

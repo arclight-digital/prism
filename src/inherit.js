@@ -13,9 +13,10 @@
  * that recovered its props but not its event handlers passes every comparison
  * of prop lists, which is the first thing anyone checks.
  *
- * The rule: events and per-property facts merge unconditionally, because
- * neither is rendering — a subclass dispatches its parent's events too, and
- * `super()` runs the parent's constructor whatever the subclass draws.
+ * The rule: events, methods and per-property facts merge unconditionally,
+ * because none of them is rendering — a subclass dispatches its parent's events
+ * and inherits its parent's methods, and `super()` runs the parent's
+ * constructor whatever the subclass draws.
  * Template, styles, slots and classification transfer only when the subclass
  * renders nothing of its own; a subclass with its own `render()` is describing
  * its own surface and is believed about it. Either way the subclass wins where
@@ -48,8 +49,20 @@ export function inheritFrom(meta, ancestor) {
   // have the detail keys — and the keys are what two-way bindings derive from.
   const ownDetails = Object.keys(meta.eventDetails ?? {}).length;
   meta.eventDetails = { ...ancestor.eventDetails, ...meta.eventDetails };
+  meta.eventWrites = { ...ancestor.eventWrites, ...meta.eventWrites };
   if (Object.keys(meta.eventDetails).length > ownDetails && addedEvents.length === 0) {
     inherited.push('event payloads');
+  }
+
+  // Methods, on the same terms and for the same reason: they are on the
+  // prototype chain whatever the subclass renders, and an empty subclass of a
+  // component driven by `show()` is driven by `show()` too — with no handle in
+  // its wrappers to call it through, if this didn't merge.
+  const ownMethods = new Set(meta.methods ?? []);
+  const addedMethods = (ancestor.methods ?? []).filter((m) => !ownMethods.has(m));
+  if (addedMethods.length > 0) {
+    meta.methods = [...(meta.methods ?? []), ...addedMethods];
+    inherited.push(`methods (${addedMethods.join(', ')})`);
   }
 
   // Per-property facts, also unconditionally. `elementProperties` carries what

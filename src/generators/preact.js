@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { HEADER, claimOutput } from './header.js';
 import { tsType, passthroughMembers, projectsChildren } from './types.js';
 import { localNames } from './identifiers.js';
+import { needsHandle, methodPhrase } from './handles.js';
 import { registerImport } from './imports.js';
 
 /**
@@ -47,15 +48,28 @@ export function generatePreact(meta, config, root) {
   const lines = [HEADER, ''];
 
   const hasEvents = meta.events.length > 0;
+  // A function component drops `ref` before it reaches props, so the element is
+  // unreachable from a consumer's ref unless the component is wrapped. That is
+  // what `forwardRef` is for, and `preact/compat` ships with preact itself.
+  const handle = needsHandle(meta, 'preact');
+  const usesRef = hasEvents || handle;
+  const register = registerImport(meta, config);
 
-  lines.push(`import { h, type FunctionComponent } from 'preact';`);
+  lines.push(handle ? `import { h } from 'preact';` : `import { h, type FunctionComponent } from 'preact';`);
+  if (handle) lines.push(`import { forwardRef } from 'preact/compat';`);
   // Preact lowercases `on*` handler names, so hyphenated custom events like
   // `arc-click` can't be bound as JSX props — attach them via addEventListener
   // in a layout effect against a ref instead.
-  if (hasEvents) {
-    lines.push(`import { useLayoutEffect, useRef } from 'preact/hooks';`);
+  const hooks = [
+    ...(handle ? ['useImperativeHandle'] : []),
+    ...(hasEvents ? ['useLayoutEffect'] : []),
+    ...(usesRef ? ['useRef'] : []),
+  ];
+  if (hooks.length > 0) {
+    lines.push(`import { ${hooks.join(', ')} } from 'preact/hooks';`);
   }
-  lines.push(`import '${registerImport(meta, config)}';`);
+  lines.push(`import '${register}';`);
+  if (handle) lines.push(`import type { ${meta.className} } from '${register}';`);
   lines.push('');
 
   // Props interface
@@ -95,38 +109,48 @@ export function generatePreact(meta, config, root) {
     locals.get(p.name) === p.name ? p.name : `${p.name}: ${locals.get(p.name)}`
   ));
 
-  if (hasEvents) {
-    const propsObj = ['ref', ...propEntries, '...rest'].join(', ');
-    lines.push(`export const ${meta.pascalName}: FunctionComponent<${meta.pascalName}Props> = ({ ${destructStr}...rest }) => {`);
-    lines.push(`  const ref = useRef<HTMLElement>(null);`);
-    lines.push(`  useLayoutEffect(() => {`);
-    lines.push(`    const el = ref.current;`);
-    lines.push(`    if (!el) return;`);
-    lines.push(`    const listeners: Array<[string, EventListener]> = [];`);
-    for (const event of meta.events) {
-      const handler = eventToHandlerName(event);
-      lines.push(`    if (${handler}) {`);
-      lines.push(`      const fn: EventListener = (e) => ${handler}(e as CustomEvent);`);
-      lines.push(`      el.addEventListener('${event}', fn);`);
-      lines.push(`      listeners.push(['${event}', fn]);`);
-      lines.push(`    }`);
-    }
-    lines.push(`    return () => listeners.forEach(([name, fn]) => el.removeEventListener(name, fn));`);
-    lines.push(`  }, [${meta.events.map(eventToHandlerName).join(', ')}]);`);
-    if (takesChildren) {
-      lines.push(`  return h('${meta.tag}', { ${propsObj} }, children);`);
-    } else {
-      lines.push(`  return h('${meta.tag}', { ${propsObj} });`);
-    }
-    lines.push(`};`);
-  } else {
-    const propsObj = [...propEntries, '...rest'].join(', ');
+  const propsObj = [...(usesRef ? ['ref'] : []), ...propEntries, '...rest'].join(', ');
+  const call = takesChildren
+    ? `h('${meta.tag}', { ${propsObj} }, children)`
+    : `h('${meta.tag}', { ${propsObj} })`;
+
+  // A one-expression component for the shape that needs no hooks; anything else
+  // opens a body. `forwardRef` takes the same parameter list with the consumer's
+  // ref beside it.
+  if (!usesRef) {
     lines.push(`export const ${meta.pascalName}: FunctionComponent<${meta.pascalName}Props> = ({ ${destructStr}...rest }) =>`);
-    if (takesChildren) {
-      lines.push(`  h('${meta.tag}', { ${propsObj} }, children);`);
+    lines.push(`  ${call};`);
+  } else {
+    if (handle) {
+      lines.push(`/** Driven by its methods: ${methodPhrase(meta)}. A ref on it holds the element. */`);
+      lines.push(`export const ${meta.pascalName} = forwardRef<${meta.className}, ${meta.pascalName}Props>(({ ${destructStr}...rest }, forwarded) => {`);
     } else {
-      lines.push(`  h('${meta.tag}', { ${propsObj} });`);
+      lines.push(`export const ${meta.pascalName}: FunctionComponent<${meta.pascalName}Props> = ({ ${destructStr}...rest }) => {`);
     }
+    lines.push(`  const ref = useRef<${handle ? meta.className : 'HTMLElement'}>(null);`);
+    if (handle) {
+      // The element is the handle, rather than a facade over it: everything the
+      // component declares stays reachable without prism restating any of it.
+      lines.push(`  useImperativeHandle(forwarded, () => ref.current as ${meta.className}, []);`);
+    }
+    if (hasEvents) {
+      lines.push(`  useLayoutEffect(() => {`);
+      lines.push(`    const el = ref.current;`);
+      lines.push(`    if (!el) return;`);
+      lines.push(`    const listeners: Array<[string, EventListener]> = [];`);
+      for (const event of meta.events) {
+        const handler = eventToHandlerName(event);
+        lines.push(`    if (${handler}) {`);
+        lines.push(`      const fn: EventListener = (e) => ${handler}(e as CustomEvent);`);
+        lines.push(`      el.addEventListener('${event}', fn);`);
+        lines.push(`      listeners.push(['${event}', fn]);`);
+        lines.push(`    }`);
+      }
+      lines.push(`    return () => listeners.forEach(([name, fn]) => el.removeEventListener(name, fn));`);
+      lines.push(`  }, [${meta.events.map(eventToHandlerName).join(', ')}]);`);
+    }
+    lines.push(`  return ${call};`);
+    lines.push(handle ? `});` : `};`);
   }
   lines.push('');
 

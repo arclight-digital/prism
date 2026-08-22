@@ -20,6 +20,7 @@
 
 import { pathToFileURL } from 'node:url';
 import { statSync } from 'node:fs';
+import { isPublicMethod } from './parser.js';
 
 /** Property names prism can emit into a wrapper — same rule as the parser's. */
 const VALID_PROP_NAME = /^[A-Za-z_$][\w$]*$/;
@@ -101,6 +102,45 @@ function attributeOf(name, declaration) {
 }
 
 /**
+ * Where the component's own prototype chain stops and the platform's begins.
+ * A mixin between the two is the whole point — its class is neither of these,
+ * so its methods are read like the component's own.
+ */
+const ELEMENT_BASES = new Set([
+  'LitElement', 'ReactiveElement', 'HTMLElement', 'EventTarget', 'Object',
+]);
+
+/**
+ * The public methods of a class, its mixins included.
+ *
+ * `checkValidity()` and `reportValidity()` are declared once, in a form-control
+ * mixin, and are real methods of 27 elements whose own files never mention
+ * them — the same shape as the `readonly` property that motivated reading the
+ * class in the first place. Accessors are skipped: a getter/setter pair is a
+ * property, and the generated prop binding already carries it.
+ *
+ * @param {Function} Ctor
+ * @returns {string[]}
+ */
+function readMethods(Ctor) {
+  const names = [];
+  let proto = Ctor.prototype;
+  while (proto && proto !== Object.prototype) {
+    if (ELEMENT_BASES.has(proto.constructor?.name)) break;
+    for (const name of Object.getOwnPropertyNames(proto)) {
+      if (names.includes(name) || !isPublicMethod(name)) continue;
+      let descriptor;
+      try {
+        descriptor = Object.getOwnPropertyDescriptor(proto, name);
+      } catch { continue; }
+      if (typeof descriptor?.value === 'function') names.push(name);
+    }
+    proto = Object.getPrototypeOf(proto);
+  }
+  return names;
+}
+
+/**
  * Read one class, if it is one prism can read.
  *
  * Touching `observedAttributes` is what forces Lit to finalize the class and
@@ -109,7 +149,8 @@ function attributeOf(name, declaration) {
  * ReactiveElement can throw from that getter, and "not a component" is an
  * ordinary answer here, not an error.
  *
- * @returns {{ props: import('./parser.js').PropMeta[], formAssociated: boolean }|null}
+ * @returns {{ props: import('./parser.js').PropMeta[], formAssociated: boolean,
+ *   methods: string[] }|null}
  */
 function readClass(Ctor) {
   let declarations;
@@ -141,7 +182,7 @@ function readClass(Ctor) {
     });
   }
 
-  return { props, formAssociated: Ctor.formAssociated === true };
+  return { props, formAssociated: Ctor.formAssociated === true, methods: readMethods(Ctor) };
 }
 
 /**

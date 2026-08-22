@@ -1,5 +1,5 @@
 /**
- * The acceptance corpus: five component shapes, every generator, one pass.
+ * The acceptance corpus: seven component shapes, every generator, one pass.
  *
  * Every defect prism has shipped was found downstream, by a check written in the
  * consuming repo, against a catalog of 200 real components — because the
@@ -35,7 +35,7 @@ import { generatePreact } from '../src/generators/preact.js';
 import { generateJSXTypes } from '../src/generators/jsx-types.js';
 import { formBinding } from '../src/generators/form-control.js';
 import {
-  verifyWrapper, verifyRegistration, verifyAccessor, VERIFIABLE,
+  verifyWrapper, verifyRegistration, verifyAccessor, verifyHandle, VERIFIABLE,
 } from '../src/verify.js';
 import { registerImport } from '../src/generators/imports.js';
 import { updateReactTierBarrel, updateReactRootBarrel, pruneBarrels } from '../src/generators/barrel.js';
@@ -87,7 +87,8 @@ beforeAll(() => {
 describe('the corpus itself', () => {
   it('parses every member', () => {
     expect(metas.map((m) => m.tag).sort()).toEqual([
-      'arc-badge', 'arc-checkbox', 'arc-code-block', 'arc-input', 'arc-top-bar',
+      'arc-badge', 'arc-checkbox', 'arc-code-block', 'arc-drawer', 'arc-input',
+      'arc-notice', 'arc-top-bar',
     ]);
   });
 
@@ -120,6 +121,75 @@ describe('every wrapper of every component', () => {
         expect(verifyWrapper(framework, output[framework][meta.tag], meta)).toEqual([]);
       }
     }
+  });
+
+  it('hands back the element wherever the component has methods to call on it', () => {
+    for (const framework of VERIFIABLE) {
+      for (const meta of metas) {
+        expect(verifyHandle(framework, output[framework][meta.tag], meta)).toBe(null);
+      }
+    }
+  });
+});
+
+describe('a component that moves state its consumer also holds', () => {
+  const meta = byTag.get('arc-drawer');
+
+  it('is read as announcing the prop, not the key the payload happens to use', () => {
+    // The whole difference from the rule this replaced: `detail.value` is not
+    // called `open`, and a name-keyed rule sees nothing here at all.
+    expect(meta.eventDetails['arc-drawer-toggle']).toEqual(['value']);
+    expect(meta.eventWrites['arc-drawer-toggle']).toEqual({ value: 'open' });
+  });
+
+  it('binds it back in the three frameworks that need the wrapper to say so', () => {
+    expect(output.svelte['arc-drawer']).toContain("if ('value' in detail) open = detail.value as boolean;");
+    expect(output.vue['arc-drawer']).toContain("if ('value' in detail) emit('update:open', detail.value as boolean);");
+    expect(output.angular['arc-drawer']).toContain('this.openChange.emit(detail.value as boolean);');
+  });
+
+  it('declares the prop bindable, so a parent copy can be written to', () => {
+    expect(output.svelte['arc-drawer']).toContain('open = $bindable(false)');
+    expect(output.vue['arc-drawer']).toContain("'update:open': [value: boolean];");
+    expect(output.angular['arc-drawer']).toContain('@Output() openChange = new EventEmitter<boolean>();');
+  });
+
+  it('leaves the prop it says nothing about alone', () => {
+    expect(output.svelte['arc-drawer']).not.toContain('label = $bindable');
+    expect(output.angular['arc-drawer']).not.toContain('labelChange');
+  });
+});
+
+describe('a component driven by its methods', () => {
+  const meta = byTag.get('arc-notice');
+
+  it('is read as having the three a consumer calls, and none of the rest', () => {
+    // A static isn't reachable through an element reference, `_schedule` is
+    // private by the convention the catalog follows, and the browser calls
+    // connectedCallback.
+    expect(meta.methods).toEqual(['show', 'dismiss', 'clear']);
+  });
+
+  it('hands back the element in every wrapper that would otherwise keep it', () => {
+    expect(output.svelte['arc-notice']).toContain('export function element(): ArcNotice | undefined {');
+    expect(output.vue['arc-notice']).toContain('defineExpose({ element: __el });');
+    expect(output.angular['arc-notice']).toContain('get element(): ArcNotice {');
+    expect(output.solid['arc-notice']).toContain('ref?: ArcNotice | ((el: ArcNotice) => void);');
+    expect(output.preact['arc-notice']).toContain('forwardRef<ArcNotice, NoticeProps>');
+  });
+
+  it('leaves React alone, which forwarded refs all along', () => {
+    // The reason this was found by an application rather than a build: the one
+    // wrapper anybody reaches for first was never broken.
+    expect(output.react['arc-notice']).toContain('createComponent({');
+    expect(output.react['arc-notice']).not.toContain('forwardRef');
+  });
+
+  it('gives a component with no methods no handle at all', () => {
+    expect(output.svelte['arc-badge']).not.toContain('export function element');
+    expect(output.vue['arc-badge']).not.toContain('defineExpose');
+    expect(output.angular['arc-badge']).not.toContain('get element()');
+    expect(output.preact['arc-badge']).not.toContain('forwardRef');
   });
 });
 
@@ -172,6 +242,19 @@ describe('a form-associated element', () => {
     expect(output.angular['arc-checkbox']).toContain('const next = value ?? false;');
   });
 
+  it('does not mirror a payload onto the prop that merely shares its key', () => {
+    // `detail.value` is the checked flag; `value` is the string the form
+    // submits. The names line up and the meanings do not, so what the dispatch
+    // site says outranks what the key is called.
+    expect(byTag.get('arc-checkbox').eventWrites['arc-change']).toEqual({
+      value: 'checked', checked: 'checked',
+    });
+    const svelte = output.svelte['arc-checkbox'];
+    expect(svelte).toContain("if ('checked' in detail) checked = detail.checked as boolean;");
+    expect(svelte).not.toContain('value = detail.value');
+    expect(output.angular['arc-checkbox']).not.toContain('valueChange');
+  });
+
   it('leaves a component that is not form-associated without one', () => {
     for (const tag of ['arc-badge', 'arc-top-bar', 'arc-code-block']) {
       expect(byTag.get(tag).formAssociated).toBe(false);
@@ -195,6 +278,29 @@ describe('the JSX declaration files', () => {
   it('type a documented union as one, so a wrong value will not compile', () => {
     const [react] = generateJSXTypes(metas, { outDir: 'types', prefix: 'arc', frameworks: ['react'] }, tmpDir);
     expect(readFileSync(react.path, 'utf-8')).toContain("tone?: 'neutral' | 'success' | 'danger';");
+  });
+});
+
+describe('a type import that stops being used', () => {
+  // Both were found by test/typecheck/run.js, which compiles this corpus with
+  // each framework's own checker — and neither is visible from the inside: the
+  // wrapper is well-formed, says everything it should, and fails `tsc` in the
+  // consumer's package under `noUnusedLocals`, which is on in the starter
+  // template both frameworks ship.
+  it('is left out of the Svelte wrapper of a component with no slots', () => {
+    expect(byTag.get('arc-notice').noDefaultSlot).toBe(true);
+    expect(output.svelte['arc-notice']).not.toContain("import type { Snippet } from 'svelte';");
+    // And is still there for the component that has both members.
+    expect(output.svelte['arc-top-bar']).toContain("import type { Snippet } from 'svelte';");
+  });
+
+  it('is left out of the Solid wrapper of the same component', () => {
+    expect(output.solid['arc-notice']).toContain("import { splitProps, type Component } from 'solid-js';");
+    // The augmentation below still names the namespace; it is the import that
+    // has nothing left to refer to.
+    expect(output.solid['arc-notice']).not.toContain('type JSX');
+    expect(output.solid['arc-top-bar']).toContain('type JSX');
+    expect(output.solid['arc-top-bar']).toContain('children?: JSX.Element;');
   });
 });
 

@@ -30,6 +30,14 @@
  * @property {string} template - raw HTML string from render()
  * @property {string[]} events - custom event names
  * @property {Record<string, string[]>} eventDetails - event name → keys of its `detail` object
+ * @property {Record<string, Record<string, string>>} eventWrites - event name →
+ *   detail key → the prop that key carries the new value of, for payloads whose
+ *   key doesn't name the prop itself (`arc-sidebar-toggle`'s `detail.value`
+ *   announcing `sidebarOpen`). Read from the dispatch site, not from a table of
+ *   names
+ * @property {string[]} methods - public instance methods, in declaration order:
+ *   what a consumer calls on the element, and so what makes a wrapper owe them a
+ *   handle on it
  * @property {string[]} slots - named slots the component exposes, in template order
  * @property {string[]} slotsInMarkup - the subset seen as real `<slot name>` tags,
  *   as opposed to known only from a `@slot` JSDoc tag
@@ -89,7 +97,7 @@ function makeWarn(diagnostics, filePath) {
  * @param {{
  *   propsFrom?: (source: string, filePath: string) => PropMeta[]|undefined,
  *   formAssociated?: (source: string, filePath: string) => boolean|undefined,
- *   runtime?: { classes: Map<string, { props: PropMeta[], formAssociated: boolean }> },
+ *   runtime?: { classes: Map<string, { props: PropMeta[], formAssociated: boolean, methods: string[] }> },
  * }} [opts] - `runtime` is this file's entry from `resolveRuntimeProps`, when
  *   `config.runtime` is on and the module imported
  * @returns {ComponentMeta|null}
@@ -154,8 +162,21 @@ export function parseComponent(source, filePath, prefix = 'arc', overrides = {},
   const propDefaults = Object.fromEntries(props.map((p) => [p.name, p.default]));
   const template = extractTemplate(source, propDefaults);
 
+  // Where each of the class's members begins and ends — what says whether an
+  // assignment is a default or a write-back, and what the public methods are.
+  const klass = scanClassMembers(source, className);
+
   // Parse custom events from dispatchEvent calls
-  const { events, eventDetails } = extractEvents(source, warn, tag);
+  const { events, eventDetails, eventWrites } = extractEvents(source, warn, tag, props, klass);
+
+  // The imperative API. A component that has one needs its element reachable
+  // from every wrapper, or every capability behind these is unreachable in the
+  // frameworks that hand back their own component object instead.
+  //
+  // The class outranks the file for the same reason it does for props: a method
+  // contributed by a mixin is in no file this reader is ever handed, and
+  // `checkValidity()` on 27 form controls is exactly that shape.
+  const methods = runtime?.methods ?? publicMethods(klass);
 
   // Detect interactivity level
   const classification = classify(source, events, tag, overrides);
@@ -174,6 +195,7 @@ export function parseComponent(source, filePath, prefix = 'arc', overrides = {},
 
   return {
     tag, className, pascalName, tier, props, css, template, events, eventDetails,
+    eventWrites, methods,
     slots, slotsInMarkup, hasDefaultSlot, noDefaultSlot, interactivity, classification, hostDisplay,
     formAssociated,
   };
@@ -467,13 +489,27 @@ function parseProperties(source, warn, tag, unparsed) {
 
 /**
  * Index of the delimiter closing the group that opened just before `start`.
- * Quoted text is stepped over so a brace inside a string can't unbalance it.
+ *
+ * Quoted text is stepped over so a brace inside a string can't unbalance it,
+ * and so are comments — a class body is mostly prose here, and one apostrophe
+ * in `// the drawer's state` would otherwise open a string that swallows
+ * everything to the next quote.
  */
 function endOfGroup(source, start) {
   let depth = 1;
   let i = start;
   while (i < source.length) {
     const c = source[i];
+    if (c === '/' && source[i + 1] === '/') {
+      const nl = source.indexOf('\n', i);
+      i = nl === -1 ? source.length : nl + 1;
+      continue;
+    }
+    if (c === '/' && source[i + 1] === '*') {
+      const close = source.indexOf('*/', i + 2);
+      i = close === -1 ? source.length : close + 2;
+      continue;
+    }
     if (c === '"' || c === "'" || c === '`') { i = skipString(source, i); continue; }
     if (c === '{' || c === '[' || c === '(') depth++;
     else if (c === '}' || c === ']' || c === ')') {
@@ -1412,20 +1448,297 @@ function extractHostDisplay(css) {
 }
 
 /**
- * Extract custom event names — and the keys of each event's `detail` payload —
- * from dispatchEvent(new CustomEvent('...', { detail: { ... } })) calls.
+ * Class members that exist because Lit or the browser calls them. A consumer
+ * never does, so none of them is the imperative API a wrapper has to expose.
+ * `*Callback` covers the platform's own reactions along with Lit's
+ * `formResetCallback` family.
+ */
+const LIFECYCLE_METHODS = new Set([
+  'constructor', 'render', 'update', 'willUpdate', 'firstUpdated', 'updated',
+  'shouldUpdate', 'performUpdate', 'scheduleUpdate', 'requestUpdate',
+  'createRenderRoot', 'getUpdateComplete', 'addController', 'removeController',
+]);
+
+/**
+ * Walk the component class's body and record where each member begins and ends.
  *
- * The detail keys are what let wrappers derive two-way bindings: an event whose
- * detail carries a key matching a declared prop is that prop's write-back path.
+ * Two questions need this and neither survives a regex over the whole file.
+ * Which props the component assigns *outside its constructor* — a constructor
+ * assignment is a default, the same assignment inside a keydown handler is the
+ * component moving state its consumer also holds. And which public methods it
+ * has, which is what says every wrapper owes its consumer a handle on the
+ * element.
+ *
+ * Scanned rather than parsed, like the rest of this file: strings, template
+ * literals, comments and decorators are stepped over, which is what a
+ * `render()` full of `` html`…` `` requires — those braces are not the class's.
+ *
+ * The scan answers nothing rather than something wrong: a member whose head it
+ * cannot read (a computed key, a `static {}` block) abandons the whole walk,
+ * because a mis-placed member boundary would put a method's body in the
+ * constructor's range and turn a default into a write-back.
+ *
+ * @param {string} source
+ * @param {string} className
+ * @returns {null | { start: number, end: number, members: Array<{
+ *   name: string, kind: 'method'|'accessor'|'field', isStatic: boolean,
+ *   start: number, end: number }> }}
+ */
+function scanClassMembers(source, className) {
+  const header = new RegExp(`class\\s+${className}\\b[^{]*\\{`).exec(source);
+  if (!header) return null;
+  const start = header.index + header[0].length;
+  const end = endOfGroup(source, start);
+  const members = [];
+
+  // `static`, `async`, a generator star and an accessor keyword, then the name.
+  // `get` only counts as a keyword when whitespace follows it, so a method
+  // actually named `get(key)` keeps its name.
+  const HEAD = /(static\s+)?(?:async\s+)?(?:\*\s*)?(get\s+|set\s+)?(#?[A-Za-z_$][\w$]*)\s*/y;
+  let i = start;
+  while (i < end) {
+    i = skipTrivia(source, i, end);
+    if (i >= end) break;
+
+    HEAD.lastIndex = i;
+    const head = HEAD.exec(source);
+    if (!head) {
+      const c = source[i];
+      // A balanced token where a name was expected — a computed key, or the
+      // parameter list and body that follow one. Stepping over each in turn
+      // keeps the walk on the member boundaries.
+      if (c === '[' || c === '(' || c === '{') { i = endOfGroup(source, i + 1) + 1; continue; }
+      if (c === '"' || c === "'" || c === '`') { i = skipString(source, i); continue; }
+      return null;
+    }
+
+    const memberStart = head.index;
+    const isStatic = Boolean(head[1]);
+    const accessor = Boolean(head[2]);
+    const name = head[3];
+    const after = HEAD.lastIndex;
+
+    if (source[after] === '(') {
+      const params = endOfGroup(source, after + 1);
+      let brace = params + 1;
+      while (brace < end && /\s/.test(source[brace])) brace++;
+      if (source[brace] !== '{') return null;
+      const close = endOfGroup(source, brace + 1);
+      members.push({
+        name, kind: accessor ? 'accessor' : 'method', isStatic,
+        start: memberStart, end: close + 1,
+      });
+      i = close + 1;
+    } else if (source[after] === '=') {
+      const stop = endOfFieldValue(source, after + 1, end);
+      members.push({ name, kind: 'field', isStatic, start: memberStart, end: stop });
+      i = stop;
+    } else {
+      // A bare declaration (`accessor foo;`, `#queue;`). Its own name is all of it.
+      members.push({ name, kind: 'field', isStatic, start: memberStart, end: after });
+      i = after;
+    }
+  }
+
+  return { start, end, members };
+}
+
+/** Advance past whitespace, separators, comments and decorators. */
+function skipTrivia(source, i, end) {
+  while (i < end) {
+    const c = source[i];
+    if (c === ';' || /\s/.test(c)) { i++; continue; }
+    if (c === '/' && source[i + 1] === '/') {
+      const nl = source.indexOf('\n', i);
+      i = nl === -1 ? end : nl + 1;
+      continue;
+    }
+    if (c === '/' && source[i + 1] === '*') {
+      const close = source.indexOf('*/', i + 2);
+      i = close === -1 ? end : close + 2;
+      continue;
+    }
+    // A decorator belongs to the member below it, arguments and all.
+    if (c === '@') {
+      const NAME = /@[A-Za-z_$][\w$.]*\s*/y;
+      NAME.lastIndex = i;
+      if (!NAME.exec(source)) return i;
+      i = NAME.lastIndex;
+      if (source[i] === '(') i = endOfGroup(source, i + 1) + 1;
+      continue;
+    }
+    return i;
+  }
+  return i;
+}
+
+/**
+ * Index just past a class field's initializer — the `;` that ends it, or the
+ * newline that ends it without one.
+ */
+function endOfFieldValue(source, from, end) {
+  let depth = 0;
+  let i = from;
+  while (i < end) {
+    const c = source[i];
+    if (c === '"' || c === "'" || c === '`') { i = skipString(source, i); continue; }
+    if (c === '/' && source[i + 1] === '/') {
+      const nl = source.indexOf('\n', i);
+      if (depth === 0) return nl === -1 ? end : nl;
+      i = nl === -1 ? end : nl + 1;
+      continue;
+    }
+    if (c === '/' && source[i + 1] === '*') {
+      const close = source.indexOf('*/', i + 2);
+      i = close === -1 ? end : close + 2;
+      continue;
+    }
+    if (c === '{' || c === '[' || c === '(') { depth++; i++; continue; }
+    if (c === '}' || c === ']' || c === ')') { depth--; i++; continue; }
+    if (depth === 0 && (c === ';' || c === '\n')) return i;
+    i++;
+  }
+  return end;
+}
+
+/**
+ * Whether a method name is one a consumer is meant to call.
+ *
+ * The same terms the reference catalog's own docs use: nothing the platform or
+ * Lit calls, and nothing marked private by `#` or by the `_` convention every
+ * component in the catalog follows. Exported because `config.runtime` applies
+ * the same rule to the prototype chain, where a mixin's methods are visible and
+ * a source reader's are not.
+ *
+ * @param {string} name
+ * @returns {boolean}
+ */
+export function isPublicMethod(name) {
+  // The name is emitted into a doc comment in every wrapper.
+  if (typeof name !== 'string' || !VALID_PROP_NAME.test(name)) return false;
+  if (name.startsWith('_') || name.startsWith('#')) return false;
+  if (name.endsWith('Callback') || LIFECYCLE_METHODS.has(name)) return false;
+  return true;
+}
+
+/**
+ * The methods a consumer is meant to call, from the class body.
+ *
+ * Instance methods only — a static is not reachable through an element
+ * reference — and a component with any of them is a component whose wrapper
+ * must hand back the element.
+ *
+ * @param {ReturnType<typeof scanClassMembers>} klass
+ * @returns {string[]}
+ */
+function publicMethods(klass) {
+  if (!klass) return [];
+  const names = [];
+  for (const member of klass.members) {
+    if (member.kind !== 'method' || member.isStatic) continue;
+    if (!isPublicMethod(member.name)) continue;
+    if (!names.includes(member.name)) names.push(member.name);
+  }
+  return names;
+}
+
+/**
+ * Props the component assigns to itself somewhere other than its constructor.
+ *
+ * Half of what makes a prop two-way. The constructor's assignments are the
+ * component's own defaults; the same assignment in an Escape handler is state
+ * the consumer holds a copy of, moving without the consumer's knowledge.
+ *
+ * @param {string} source
+ * @param {ReturnType<typeof scanClassMembers>} klass
+ * @param {Set<string>} propNames
+ * @returns {Set<string>}
+ */
+function selfAssignedProps(source, klass, propNames) {
+  const assigned = new Set();
+  if (!klass) return assigned;
+  const ctor = klass.members.find((m) => m.kind === 'method' && m.name === 'constructor');
+  // `=(?!=)` so a comparison isn't read as a write. Nothing else can reach the
+  // `=`: the name has already been consumed, so `>=` and `!==` never match.
+  const ASSIGN = /this\.([A-Za-z_$][\w$]*)\s*=(?!=)/g;
+  ASSIGN.lastIndex = klass.start;
+  let match;
+  while ((match = ASSIGN.exec(source)) !== null && match.index < klass.end) {
+    if (ctor && match.index >= ctor.start && match.index < ctor.end) continue;
+    if (propNames.has(match[1])) assigned.add(match[1]);
+  }
+  return assigned;
+}
+
+/**
+ * The prop a `detail` entry carries the new value of, when its key doesn't say.
+ *
+ * `detail: { value }` inside `_setOpen(value) { this.sidebarOpen = value; … }`
+ * is the same write-back path as `detail: { value }` on a component whose prop
+ * is called `value` — the payload just names the argument instead of the
+ * property. Two spellings are read, both statically visible:
+ *
+ *   - `detail: { open: this.sidebarOpen }` — the property outright, once it is
+ *     known to be assigned outside the constructor.
+ *   - `detail: { value }` where the enclosing method assigns that identifier to
+ *     exactly one declared prop. Ambiguity answers nothing: two props taking the
+ *     same local means neither can be said to be the one the event announces.
+ *
+ * @returns {string|null} the prop name, or null if this entry announces none
+ */
+function announcedProp(source, klass, propNames, assigned, at, value) {
+  const direct = /^this\.([A-Za-z_$][\w$]*)$/.exec(value);
+  if (direct) {
+    return propNames.has(direct[1]) && assigned.has(direct[1]) ? direct[1] : null;
+  }
+  if (!klass || !/^[A-Za-z_$][\w$]*$/.test(value)) return null;
+
+  // The assignment has to be in the same method as the dispatch. A component
+  // that happens to assign a `value` local to a prop somewhere else in the file
+  // is not this event's write-back path, and searching the whole class would
+  // find it.
+  const member = klass.members.find((m) => at >= m.start && at < m.end);
+  if (!member || member.name === 'constructor') return null;
+
+  const body = source.slice(member.start, member.end);
+  // `value` is already known to be a plain identifier, so it is safe to build
+  // a pattern from.
+  const pattern = new RegExp(`this\\.([A-Za-z_$][\\w$]*)\\s*=\\s*${value}\\s*(?:[;,)\\]}]|$)`, 'gm');
+  const found = new Set();
+  for (const m of body.matchAll(pattern)) {
+    if (propNames.has(m[1])) found.add(m[1]);
+  }
+  return found.size === 1 ? [...found][0] : null;
+}
+
+/**
+ * Extract custom event names — and the `detail` payload of each — from
+ * dispatchEvent(new CustomEvent('...', { detail: { ... } })) calls.
+ *
+ * The payload is what lets wrappers derive two-way bindings, in two ways. A
+ * detail key matching a declared prop is that prop's write-back path by name.
+ * And where the key names something else — an argument, a generic `value` — the
+ * dispatch site is read for which prop it announces, because a component that
+ * assigns a prop outside its constructor and says so in an event owns that
+ * state as much as its consumer does, whatever the payload calls it. Keying on
+ * names alone cannot see `arc-sidebar-toggle` carrying `sidebarOpen` as
+ * `detail.value`, and would keep needing new names.
  *
  * @param {string} source
  * @param {(code: string, message: string, extra?: object) => void} warn
  * @param {string} [tag]
- * @returns {{ events: string[], eventDetails: Record<string, string[]> }}
+ * @param {import('./parser.js').PropMeta[]} [props] - declared props, for the
+ *   behavioural half above
+ * @param {ReturnType<typeof scanClassMembers>} [klass]
+ * @returns {{ events: string[], eventDetails: Record<string, string[]>,
+ *   eventWrites: Record<string, Record<string, string>> }}
  */
-function extractEvents(source, warn, tag) {
+function extractEvents(source, warn, tag, props = [], klass = null) {
   const events = new Set();
   const eventDetails = {};
+  const eventWrites = {};
+  const propNames = new Set(props.map((p) => p.name));
+  const assigned = selfAssignedProps(source, klass, propNames);
   const eventPattern = /dispatchEvent\(\s*new\s+CustomEvent\(\s*['"]([^'"]+)['"]/g;
   let match;
   while ((match = eventPattern.exec(source)) !== null) {
@@ -1441,12 +1754,21 @@ function extractEvents(source, warn, tag) {
 
     // A component may dispatch the same event from several code paths with
     // different payloads (a clear button sending `{ value: '' }`, the input
-    // handler sending `{ value, valid }`); union the keys across all of them.
-    const keys = extractDetailKeys(source, eventPattern.lastIndex, warn, tag);
-    if (keys.length === 0) continue;
+    // handler sending `{ value, valid }`); union the entries across all of them.
+    const entries = extractDetailEntries(source, eventPattern.lastIndex, warn, tag);
+    if (entries.length === 0) continue;
     const seen = eventDetails[name] ?? (eventDetails[name] = []);
-    for (const key of keys) {
+    for (const { key, value } of entries) {
       if (!seen.includes(key)) seen.push(key);
+
+      // Which prop this key carries the new value of, where the key itself
+      // doesn't say. First dispatch site to answer wins: a later path sending a
+      // literal (`{ value: '' }`) says nothing about the prop and must not
+      // unsay what the path that assigns it established.
+      const prop = announcedProp(source, klass, propNames, assigned, match.index, value);
+      if (!prop) continue;
+      const writes = eventWrites[name] ?? (eventWrites[name] = {});
+      if (!writes[key]) writes[key] = prop;
     }
   }
 
@@ -1470,12 +1792,13 @@ function extractEvents(source, warn, tag) {
     // inventing one would derive a two-way binding from nothing.
   }
 
-  return { events: [...events], eventDetails };
+  return { events: [...events], eventDetails, eventWrites };
 }
 
 /**
  * Given the index just past a CustomEvent's name literal, return the top-level
- * keys of its `detail` object literal.
+ * entries of its `detail` object literal — each key with the source text of the
+ * expression it carries.
  *
  * The search is bounded to this call's own options object rather than scanning
  * forward for the next `detail:` — otherwise an event dispatched without a
@@ -1485,9 +1808,9 @@ function extractEvents(source, warn, tag) {
  * @param {number} afterName - index just past the closing quote of the name
  * @param {(code: string, message: string, extra?: object) => void} warn
  * @param {string} [tag]
- * @returns {string[]}
+ * @returns {Array<{ key: string, value: string }>}
  */
-function extractDetailKeys(source, afterName, warn, tag) {
+function extractDetailEntries(source, afterName, warn, tag) {
   let i = afterName;
   while (i < source.length && /\s/.test(source[i])) i++;
   if (source[i] !== ',') return [];   // `new CustomEvent('x')` — no options
@@ -1500,7 +1823,7 @@ function extractDetailKeys(source, afterName, warn, tag) {
   if (!detail) return [];             // no detail, or detail is a variable
 
   const body = extractBalanced(options, detail.index + detail[0].length);
-  return extractObjectKeys(body).filter((key) => {
+  return extractObjectEntries(body).filter(({ key }) => {
     if (VALID_DETAIL_KEY.test(key)) return true;
     warn('invalid-detail-key', `ignoring detail key with invalid name "${key}"`, { tag });
     return false;
@@ -1508,13 +1831,19 @@ function extractDetailKeys(source, afterName, warn, tag) {
 }
 
 /**
- * Collect the top-level keys of an object-literal body (braces already
- * stripped). Handles `key: value`, shorthand `key`, and skips over nested
- * objects, strings, template literals, comments and spreads — anything whose
- * name isn't statically known can't become a binding anyway.
+ * Collect the top-level entries of an object-literal body (braces already
+ * stripped), each as its key and the source text of its value.
+ *
+ * Handles `key: value`, shorthand `key` — whose value is the key, which is the
+ * whole point for `detail: { value }` — and skips over nested objects, strings,
+ * template literals, comments and spreads: anything whose name isn't statically
+ * known can't become a binding anyway.
+ *
+ * @param {string} body
+ * @returns {Array<{ key: string, value: string }>}
  */
-function extractObjectKeys(body) {
-  const keys = [];
+function extractObjectEntries(body) {
+  const entries = [];
   let depth = 0;
   let atEntryStart = true;
   let i = 0;
@@ -1546,14 +1875,22 @@ function extractObjectKeys(body) {
     if (/\s/.test(ch)) { i++; continue; }
 
     if (atEntryStart && depth === 0) {
-      const entry = /^([A-Za-z_$][\w$]*)\s*(?::|,|$)/.exec(body.slice(i));
-      if (entry) keys.push(entry[1]);
+      const entry = /^([A-Za-z_$][\w$]*)\s*(:|,|$)/.exec(body.slice(i));
+      if (entry) {
+        const key = entry[1];
+        if (entry[2] === ':') {
+          const from = i + entry[0].length;
+          entries.push({ key, value: body.slice(from, endOfValue(body, from)).trim() });
+        } else {
+          entries.push({ key, value: key });
+        }
+      }
       atEntryStart = false;
     }
     i++;
   }
 
-  return keys;
+  return entries;
 }
 
 /**
