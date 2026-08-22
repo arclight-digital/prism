@@ -92,6 +92,10 @@ export const STRICT_CODES = [
   // A module `config.runtime` was meant to read but couldn't — that component's
   // mixin-contributed props are silently missing again, and nothing else says so.
   'runtime-unavailable',
+  // The other way a runtime answer degrades: the module imported, but the walk
+  // could not find where the framework's own prototypes begin, so the methods
+  // behind that boundary are missing again.
+  'runtime-methods-unreadable',
   // Same kind of loss as the prop findings: a binding a consumer writes, that
   // compiles, and that does nothing at runtime.
   'form-control-unbindable',

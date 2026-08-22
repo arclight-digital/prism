@@ -176,7 +176,27 @@ export function parseComponent(source, filePath, prefix = 'arc', overrides = {},
   // The class outranks the file for the same reason it does for props: a method
   // contributed by a mixin is in no file this reader is ever handed, and
   // `checkValidity()` on 26 form controls is exactly that shape.
-  const methods = runtime?.methods ?? publicMethods(klass);
+  //
+  // Unless the walk could not find where the framework's prototypes begin, in
+  // which case it answers null and the file's own reading stands. That is a
+  // real degradation — mixin methods go missing again — so it is reported
+  // rather than absorbed.
+  let methods;
+  if (runtime && runtime.methods === null) {
+    warn(
+      'runtime-methods-unreadable',
+      `${tag}: config.runtime could not tell where ${className}'s own methods end and its ` +
+      'framework base class begins, so its methods were read from the file instead — anything ' +
+      'a mixin contributes is missing from the wrappers again. This means Lit\'s own shape has ' +
+      'changed; prism looks for the prototype that owns requestUpdate, performUpdate and ' +
+      'createRenderRoot, because the class names are minified away in the build a plain import ' +
+      'resolves.',
+      { tag }
+    );
+    methods = publicMethods(klass);
+  } else {
+    methods = runtime?.methods ?? publicMethods(klass);
+  }
 
   // Detect interactivity level
   const classification = classify(source, events, tag, overrides);

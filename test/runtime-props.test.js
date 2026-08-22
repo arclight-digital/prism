@@ -21,6 +21,7 @@ import { inheritFrom } from '../src/inherit.js';
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'runtime');
 const INPUT = join(FIXTURES, 'input.js');
 const BROKEN = join(FIXTURES, 'broken.js');
+const MINIFIED = join(FIXTURES, 'minified-base.js');
 
 const parse = (path, opts = {}) =>
   parseComponent(readFileSync(path, 'utf-8'), path, 'arc', {}, opts.diagnostics ?? [], opts);
@@ -345,5 +346,62 @@ describe('a component parsed with its class in hand', () => {
       propsFrom: () => [{ name: 'value', type: 'String' }],
     });
     expect(meta.props.map((p) => p.name)).toEqual(['value']);
+  });
+});
+
+describe('a component whose framework base classes have been minified', () => {
+  /**
+   * The defect 3.1.0 shipped, and the reason it shipped: the walk stopped at a
+   * prototype whose constructor was *named* `LitElement` or `ReactiveElement`,
+   * and the build a plain `import()` resolves has neither name in it. Vitest
+   * resolves lit's `development` condition, so a test against the real package
+   * cannot see this — the fixture carries the shape instead.
+   */
+  let minified;
+  beforeAll(async () => {
+    minified = await resolveRuntimeProps([MINIFIED], {}, () => {});
+  });
+
+  const methodsOf = (name) => minified.get(MINIFIED).classes.get(name).methods;
+
+  it('stops at the framework prototype by shape, since the name is gone', () => {
+    // `show` is the component's, the two validity methods are the mixin's, and
+    // nothing from the base below it: not `enableUpdating`, which a naming rule
+    // has no reason to reject, and not `C`, a mangled private.
+    expect(methodsOf('ArcMinified')).toEqual(['show', 'checkValidity', 'reportValidity']);
+  });
+
+  it('gives a component with no imperative API none at all', () => {
+    // What went wrong downstream, in one assertion: 187 of 188 wrappers gained
+    // a handle documented as "driven by: enableUpdating() and C()", on
+    // components like a divider that are driven by nothing.
+    expect(methodsOf('ArcQuiet')).toEqual([]);
+  });
+
+  it('answers nothing when it cannot find where the framework begins', () => {
+    // Not a shorter list — no list. Everything collected past a boundary that
+    // was never recognized is suspect, and this failure looks like thoroughness
+    // rather than breakage, so the conservative direction is the only safe one.
+    expect(methodsOf('ArcOrphan')).toBe(null);
+  });
+
+  it('falls back to the file when the walk cannot answer, and reports it', () => {
+    const source = `
+      /** @tag arc-orphan */
+      export class ArcOrphan extends UnknownBase {
+        static properties = { label: { type: String } };
+        ownMethod() {}
+      }
+    `;
+    const diagnostics = [];
+    const meta = parseComponent(
+      source, '/project/src/content/orphan.js', 'arc', {}, diagnostics,
+      { runtime: minified.get(MINIFIED) }
+    );
+
+    // The file's own reading stands — which is what prism did before the walk
+    // existed, and never includes `helper()` from the unrecognized base.
+    expect(meta.methods).toEqual(['ownMethod']);
+    expect(diagnostics.map((d) => d.code)).toContain('runtime-methods-unreadable');
   });
 });

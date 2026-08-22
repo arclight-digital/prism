@@ -102,13 +102,37 @@ function attributeOf(name, declaration) {
 }
 
 /**
- * Where the component's own prototype chain stops and the platform's begins.
- * A mixin between the two is the whole point — its class is neither of these,
- * so its methods are read like the component's own.
+ * Where the component's own prototype chain stops and the framework's begins,
+ * for the bases whose names survive.
+ *
+ * `HTMLElement` is a platform global and keeps its name in every build; the
+ * shim installed above is named to match. Lit's own classes are the ones that
+ * do not — see `isFrameworkBase`.
  */
-const ELEMENT_BASES = new Set([
-  'LitElement', 'ReactiveElement', 'HTMLElement', 'EventTarget', 'Object',
-]);
+const ELEMENT_BASES = new Set(['HTMLElement', 'EventTarget']);
+
+/**
+ * What a `ReactiveElement` prototype owns, whatever it has been renamed to.
+ *
+ * A name test for `LitElement` and `ReactiveElement` is a test that passes in
+ * development and fails in production. The build a plain `import()` resolves is
+ * minified — `LitElement.name` is `"i"` and `ReactiveElement.name` is `"g"` —
+ * so a name test never matched, the walk ran straight through the framework's
+ * own prototype, and every component in a catalog came back driven by
+ * `enableUpdating()` and `C()`: the two members of `ReactiveElement` that a
+ * suffix rule and an underscore rule cannot filter, one of them a mangled
+ * private. It stopped at `HTMLElement` only because *that* name survives.
+ *
+ * Shape survives minification, and these three are the interface a
+ * `ReactiveElement` is: nothing else in a component's chain owns all of them.
+ */
+const REACTIVE_ELEMENT = ['requestUpdate', 'performUpdate', 'createRenderRoot'];
+
+/** Whether this prototype is the framework's rather than the component's. */
+function isFrameworkBase(proto) {
+  if (ELEMENT_BASES.has(proto.constructor?.name)) return true;
+  return REACTIVE_ELEMENT.every((name) => Object.hasOwn(proto, name));
+}
 
 /**
  * The public methods of a class, its mixins included.
@@ -119,14 +143,26 @@ const ELEMENT_BASES = new Set([
  * class in the first place. Accessors are skipped: a getter/setter pair is a
  * property, and the generated prop binding already carries it.
  *
+ * Answers `null` rather than a partial list when the walk reaches the end of
+ * the chain without recognizing a framework base. That means the shape this
+ * relies on has changed, and the honest answer is then no answer: the caller
+ * falls back to what the component's own source says, which is what prism read
+ * before this existed. A list assembled past the boundary is not a smaller
+ * answer, it is a wrong one — and it is wrong in the direction that looks like
+ * thoroughness, since a handle on every component reads as a check passing
+ * harder rather than failing.
+ *
  * @param {Function} Ctor
- * @returns {string[]}
+ * @returns {string[]|null}
  */
 function readMethods(Ctor) {
   const names = [];
   let proto = Ctor.prototype;
+  // `Object.prototype` is the end of the chain, not a base worth recognizing:
+  // reaching it means the framework's own prototype was never identified, and
+  // everything collected on the way is suspect rather than complete.
   while (proto && proto !== Object.prototype) {
-    if (ELEMENT_BASES.has(proto.constructor?.name)) break;
+    if (isFrameworkBase(proto)) return names;
     for (const name of Object.getOwnPropertyNames(proto)) {
       if (names.includes(name) || !isPublicMethod(name)) continue;
       let descriptor;
@@ -137,7 +173,7 @@ function readMethods(Ctor) {
     }
     proto = Object.getPrototypeOf(proto);
   }
-  return names;
+  return null;
 }
 
 /**
