@@ -314,9 +314,11 @@ So a component with public methods gets a handle in every wrapper, typed as the 
 | Angular | `@ViewChild(Toast)` | `toast.element` |
 | Solid | `ref={el}` | `el` — the ref is forwarded to the element |
 | Preact | `ref={el}` | `el.current` — the component is wrapped in `forwardRef` |
-| React | `ref={el}` | `el.current` — already the case, nothing added |
+| React | `ref={el}` | `el.current` — provided by `@lit/react`, not emitted here |
 
 `element` yields to a prop of the same name (the handle becomes `_element`); in Solid, `ref` is the framework's own word and a component declaring a prop by that name keeps it and gets no handle.
+
+**React's row is the one prism does not verify.** The other five are emitted here and read back by `wrapper-missing-handle`; React's rests on `@lit/react`'s own contract, so prism emits nothing to check and that finding skips the framework entirely. If the ref forwarding in `createComponent` ever changed, React wrappers would quietly have no handle and the check built to catch a missing handle would not fire — it can only fail in the direction of something prism wrote.
 
 Nothing about the method surface is restated in the wrapper — the handle *is* the element, so everything the component declares stays reachable, and prism has no signature to get wrong.
 
