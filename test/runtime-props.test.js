@@ -73,6 +73,20 @@ describe('resolveRuntimeProps', () => {
     expect(methods).toEqual(['checkValidity', 'reportValidity']);
   });
 
+  it('leaves out the callbacks only a form owner calls', () => {
+    // `formDisabledCallback` and its two siblings are platform lifecycle, but
+    // neither Lit's nor `HTMLElement`'s — a skip list spelled as those names
+    // would read them as public API, and every form control's handle would
+    // advertise three methods no consumer may call. The rule is the `*Callback`
+    // suffix, which is why they never get that far.
+    const methods = runtime.get(INPUT).classes.get('ArcInput').methods;
+    // Anchored, so the three absences can't be satisfied by an empty list.
+    expect(methods).toContain('checkValidity');
+    for (const name of ['formDisabledCallback', 'formResetCallback', 'formStateRestoreCallback']) {
+      expect(methods).not.toContain(name);
+    }
+  });
+
   it('takes the methods the class has over the ones its file shows', () => {
     // Read from source this component has none, so its Svelte, Vue, Angular,
     // Solid and Preact wrappers would hand back no element to call them on.

@@ -90,9 +90,9 @@ element at all. Rendering is unchanged.
 With `config.runtime` on, a mixin's methods are the component's methods, so
 `checkValidity()` and `reportValidity()` from a form-control mixin give every
 control a handle in five packages. That is correct — they are real public
-methods of those elements — but in the reference consumer it is roughly 27
-components' worth of handles arriving for a reason that has nothing to do with
-`arc-toast`, and it reads as a surprise in review unless you know.
+methods of those elements — but in the reference consumer it is 26 components'
+worth of handles arriving for a reason that has nothing to do with `arc-toast`,
+and it reads as a surprise in review unless you know.
 
 ### Fixed
 

@@ -32,6 +32,24 @@ export const FormControlMixin = (Base) => class extends Base {
     return this.checkValidity();
   }
 
+  /**
+   * The form owner calls these three and nobody else can. They are platform
+   * lifecycle that is neither Lit's nor `HTMLElement`'s, so a skip list spelled
+   * as *those* names would let them through — and a wrapper would end up
+   * telling its consumer to call `formResetCallback()` on the handle.
+   */
+  formDisabledCallback(disabled) {
+    this.readonly = disabled;
+  }
+
+  formResetCallback() {
+    this.value = '';
+  }
+
+  formStateRestoreCallback(state) {
+    this.value = state;
+  }
+
   _internalState() {
     return { touched: false };
   }

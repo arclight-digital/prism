@@ -175,7 +175,7 @@ export function parseComponent(source, filePath, prefix = 'arc', overrides = {},
   //
   // The class outranks the file for the same reason it does for props: a method
   // contributed by a mixin is in no file this reader is ever handed, and
-  // `checkValidity()` on 27 form controls is exactly that shape.
+  // `checkValidity()` on 26 form controls is exactly that shape.
   const methods = runtime?.methods ?? publicMethods(klass);
 
   // Detect interactivity level

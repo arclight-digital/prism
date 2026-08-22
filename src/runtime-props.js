@@ -114,7 +114,7 @@ const ELEMENT_BASES = new Set([
  * The public methods of a class, its mixins included.
  *
  * `checkValidity()` and `reportValidity()` are declared once, in a form-control
- * mixin, and are real methods of 27 elements whose own files never mention
+ * mixin, and are real methods of 26 elements whose own files never mention
  * them — the same shape as the `readonly` property that motivated reading the
  * class in the first place. Accessors are skipped: a getter/setter pair is a
  * property, and the generated prop binding already carries it.
