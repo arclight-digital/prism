@@ -1,9 +1,6 @@
 # Changelog
 
-## 3.2.0 — unreleased
-
-> Soaking as **`3.2.0-beta.1`** against the reference consumer before release.
-> This note goes when 3.2.0 does.
+## 3.2.0 — 2026-09-26
 
 ### Added
 
