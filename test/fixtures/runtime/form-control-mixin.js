@@ -23,6 +23,13 @@ export const FormControlMixin = (Base) => class extends Base {
     readonly: { type: Boolean, reflect: true },
   };
 
+  // What every real form control does, and what a bare `HTMLElement` fallback
+  // installed ahead of Lit's own shim made unconstructable.
+  constructor() {
+    super();
+    this._internals = this.attachInternals();
+  }
+
   /** The same shape one level up: methods no reader of the component's own file finds. */
   checkValidity() {
     return !this.required || Boolean(this.value);

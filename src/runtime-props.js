@@ -20,6 +20,7 @@
 
 import { pathToFileURL } from 'node:url';
 import { statSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { isPublicMethod } from './parser.js';
 
 /** Property names prism can emit into a wrapper — same rule as the parser's. */
@@ -36,13 +37,9 @@ const KNOWN_TYPES = new Set(['String', 'Boolean', 'Number', 'Array', 'Object']);
  * same tag. The registry here keeps the first definition and ignores the rest;
  * prism reads the class it imported, never the one the registry holds.
  *
- * `HTMLElement` is a fallback only — Lit 3 carries its own DOM shim — and is
- * installed with `??=` so a real DOM, or a shim from `config.runtime.setup`,
- * always wins.
+ * `HTMLElement` is not installed here — see `installElementFallback`.
  */
 function installGlobals() {
-  globalThis.HTMLElement ??= class HTMLElement {};
-
   if (!globalThis.customElements) {
     const defined = new Map();
     globalThis.customElements = {
@@ -58,6 +55,30 @@ function installGlobals() {
   }
 
   tolerateDuplicateDefines();
+}
+
+/**
+ * Let the consumer's own Lit bind to its own DOM shim, then install a bare
+ * `HTMLElement` for anything else that extends it at import time.
+ *
+ * Order is the whole point. Lit's node build declares `class ReactiveElement
+ * extends (globalThis.HTMLElement ?? shim)` once, when it loads — so a bare
+ * fallback installed first becomes every component's platform base, with no
+ * `attachInternals`, `attachShadow` or attributes. Reading `elementProperties`
+ * never noticed; constructing a form control, whose mixin attaches internals in
+ * its constructor, fails on every one. Lit is resolved from a component's own
+ * location, since that is the copy its imports will load.
+ *
+ * Best effort: a catalog that is not built on Lit, or resolves it somewhere
+ * else, just gets the fallback, which is what every run had before.
+ */
+async function installElementFallback(files) {
+  if (!globalThis.HTMLElement && files.length > 0) {
+    try {
+      await import(pathToFileURL(createRequire(files[0]).resolve('lit')).href);
+    } catch { /* no Lit reachable from here; the fallback below is all there is */ }
+  }
+  globalThis.HTMLElement ??= class HTMLElement {};
 }
 
 /**
@@ -207,9 +228,8 @@ function readClass(Ctor) {
     props.push({
       name,
       type: typeName(declaration?.type),
-      // Left for the source pass: the class knows the property exists and what
-      // it is, the constructor knows what it starts as, and the JSDoc knows what
-      // the author meant. Only the first of those is readable from here.
+      // Filled by the parser: from the instance below where it has an answer,
+      // from the constructor's source where it does not.
       default: '',
       reflect: declaration?.reflect === true,
       values: [],
@@ -218,7 +238,129 @@ function readClass(Ctor) {
     });
   }
 
-  return { props, formAssociated: Ctor.formAssociated === true, methods: readMethods(Ctor) };
+  return {
+    props,
+    formAssociated: Ctor.formAssociated === true,
+    methods: readMethods(Ctor),
+    defaults: readInitialValues(Ctor, props.map((p) => p.name)),
+  };
+}
+
+/**
+ * Far enough to move every calendar field at once — year, month, day, hour,
+ * minute, second — so a default computed from any of them differs.
+ */
+const CLOCK_SHIFT_MS = ((400 * 24 + 7) * 60 + 13) * 60_000 + 17_000;
+
+/**
+ * What each reactive property starts as on a fresh instance.
+ *
+ * A default declared anywhere but a constructor assignment — a class field, a
+ * mixin constructor seeding its declared vocabulary, a base class — is on the
+ * instance and in no file the source reader is handed. Constructing one is the
+ * only reading that sees all of them. Lit defers the first update until the
+ * element connects, so construction runs the constructors and nothing else.
+ *
+ * A wrapper that destructures a default passes it to the element explicitly,
+ * so a default that is only true *now* — the current month, a random id — would
+ * be frozen into the wrapper at generation time. The class is constructed twice,
+ * the second time with the clock moved; a value that differs is left out and
+ * named, and the element keeps computing its own.
+ *
+ * @returns {{ values: Map<string, string>, unstable: string[] }|null} source
+ *   spellings, the form every other default in prism takes; null when the
+ *   class could not be constructed
+ */
+function readInitialValues(Ctor, names) {
+  const first = construct(Ctor);
+  if (!first) return null;
+  const second = withShiftedClock(() => construct(Ctor));
+  if (!second) return null;
+
+  const values = new Map();
+  const unstable = [];
+  for (const name of names) {
+    let a, b;
+    try {
+      a = spellValue(first[name]);
+      b = spellValue(second[name]);
+    } catch {
+      continue;
+    }
+    if (a !== b) unstable.push(name);
+    else if (a !== undefined) values.set(name, a);
+  }
+  return { values, unstable };
+}
+
+/**
+ * `new Ctor()`, without letting a constructor's timer hold the process open —
+ * prism ends by running out of work, and a pending interval never lets it.
+ */
+function construct(Ctor) {
+  const { setTimeout: realTimeout, setInterval: realInterval } = globalThis;
+  const timers = [];
+  globalThis.setTimeout = (...args) => { const t = realTimeout(...args); timers.push(t); return t; };
+  globalThis.setInterval = (...args) => { const t = realInterval(...args); timers.push(t); return t; };
+  try {
+    return new Ctor();
+  } catch {
+    return null;
+  } finally {
+    globalThis.setTimeout = realTimeout;
+    globalThis.setInterval = realInterval;
+    for (const t of timers) globalThis.clearTimeout(t);
+  }
+}
+
+function withShiftedClock(fn) {
+  const RealDate = globalThis.Date;
+  class ShiftedDate extends RealDate {
+    constructor(...args) {
+      if (args.length === 0) super(RealDate.now() + CLOCK_SHIFT_MS);
+      else super(...args);
+    }
+    static now() { return RealDate.now() + CLOCK_SHIFT_MS; }
+  }
+  globalThis.Date = ShiftedDate;
+  try {
+    return fn();
+  } finally {
+    globalThis.Date = RealDate;
+  }
+}
+
+/**
+ * A value as source would spell it, or undefined for one a wrapper cannot
+ * carry. `null` and `undefined` are absences rather than defaults, and anything
+ * that is not plain data — a Date, a Map, a function — has no literal a wrapper
+ * could emit that means the same thing.
+ */
+function spellValue(value) {
+  switch (typeof value) {
+    case 'string':
+      // Single-quoted, the spelling the source reader and typedDefault expect.
+      return `'${JSON.stringify(value).slice(1, -1).replace(/\\"/g, '"').replace(/'/g, "\\'")}'`;
+    case 'number':
+      // `Infinity` is a literal a wrapper can carry ("no limit"); NaN is not.
+      return Number.isNaN(value) ? undefined : String(value);
+    case 'boolean':
+      return String(value);
+    case 'object':
+      return value !== null && isPlainData(value) ? JSON.stringify(value) : undefined;
+    default:
+      return undefined;
+  }
+}
+
+function isPlainData(value) {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isPlainData);
+  if (typeof value !== 'object') return false;
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return false;
+  return Object.values(value).every(isPlainData);
 }
 
 /**
@@ -335,6 +477,9 @@ export async function resolveRuntimeProps(files, runtimeConfig, warn, opts = {})
     // a real one throws on a duplicate define. Re-wrap whatever is there now.
     tolerateDuplicateDefines();
   }
+
+  // After setup, so a DOM it installed is the one Lit binds to.
+  await installElementFallback(files);
 
   const resolved = new Map();
   for (const filePath of files) {

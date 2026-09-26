@@ -806,6 +806,8 @@ function flushDiagnostics(config) {
     'invalid-form-associated': 'config.formAssociated returning something prism could not use',
     'runtime-unavailable': 'component modules that would not import — read from source instead',
     'runtime-methods-unreadable': "components whose methods fell back to the file, because the class's base could not be found",
+    'runtime-defaults-unreadable': 'components prism could not construct — defaults read from the constructor source instead',
+    'runtime-default-unstable': 'computed defaults left out of wrappers — informational, the element computes its own',
     'form-control-unbindable': 'form-associated elements whose wrappers get no ControlValueAccessor',
     'generator-downgrade': 'generated files written by a newer prism than the one running',
     'framework-reserved': 'prop names a framework reserves — silently dropped at runtime',

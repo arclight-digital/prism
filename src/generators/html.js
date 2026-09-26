@@ -626,8 +626,21 @@ function applyInlineStyles(html, rules, hostClass) {
       const hasMediaTarget = pseudoRules.some((r) => r.includes(`.${className} `) || r.includes(`.${className}`));
       const keepClass = hasPseudoTarget || hasMediaTarget;
 
+      // An element that already carries a `style` of its own — a custom
+      // property the template sets from a prop — gets one attribute, not two: a
+      // browser keeps the first and drops the second. Its own declarations go
+      // last, since an inline style beats the class rules these came from.
+      const own = [];
+      const stripOwn = (attrs) => attrs.replace(/\s+style="([^"]*)"/g, (_, value) => {
+        if (value.trim()) own.push(value.trim().replace(/;$/, ''));
+        return '';
+      });
+      before = stripOwn(before);
+      after = stripOwn(after);
+      const merged = [style, ...own].filter(Boolean).join('; ');
+
       const classAttr = keepClass ? ` class="${className}"` : '';
-      const styleAttr = style ? ` style="${style}"` : '';
+      const styleAttr = merged ? ` style="${merged}"` : '';
       return `<${tagName}${before}${classAttr}${styleAttr}${after}>`;
     }
   );

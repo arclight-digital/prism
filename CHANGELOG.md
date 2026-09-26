@@ -1,5 +1,66 @@
 # Changelog
 
+## 3.2.0 — unreleased
+
+> Soaking as **`3.2.0-beta.1`** against the reference consumer before release.
+> This note goes when 3.2.0 does.
+
+### Added
+
+**With `config.runtime` on, defaults come from a constructed instance.** 3.0.0
+resolved *which* properties a component has from the class, and kept reading
+what they *start as* from constructor assignments in its source. A consumer that
+declares props through a vocabulary — `oneOf(['comfortable', 'compact'])`,
+`flag(true)`, `list()` — has the default in the declaration and a mixin
+constructor that seeds it, so its components have no constructor line to read.
+In the reference catalog, every such prop reached its wrappers with no default:
+
+```svelte
+- let { columns, rows, density, striped, ...rest }: Props = $props();
++ let { columns = [], rows = [], density = 'comfortable', striped = true, ...rest }: Props = $props();
+```
+
+That is 164 Svelte and 164 Vue wrappers in that catalog. The behaviour was
+already correct: the element seeds its own default. What was missing was the
+reader's view of it, which a consumer had been rebuilding in a post-processor.
+
+Prism now constructs each class and takes each reactive property's initial
+value, where it is plain data. Lit defers the first update until the element
+connects, so construction runs the constructors and nothing else. Timers a
+constructor starts are cleared, so none of them can hold the run open. Where
+the source spelled the same value, its spelling is kept, so no default that was
+already right changes. The instance is authoritative where it disagrees:
+`this.lookup = new Map()` used to reach wrappers as the string `'new Map()'`,
+and `this.caption = SOME_CONSTANT` as `'SOME_CONSTANT'`.
+
+**A computed default is left out rather than frozen.** Svelte and Vue pass a
+destructured default to the element, so a default computed from the clock would
+be the generation-time value in every consumer, forever. Each class is
+constructed twice, the second time with the clock moved more than a year. Any
+property that differs, such as `arc-calendar`'s `month` and `year`, gets no
+default and is reported as `runtime-default-unstable`. A class that cannot be
+constructed in Node keeps its source defaults and reports
+`runtime-defaults-unreadable`. Neither code fails `--strict`, because in both
+cases the element still applies its own default.
+
+### Fixed
+
+**`config.runtime`'s fallback `HTMLElement` replaced Lit's own DOM shim.** Lit's
+node build declares `class ReactiveElement extends (globalThis.HTMLElement ??
+shim)` once, when it loads. Prism installed a bare `HTMLElement` before any
+component was imported, so every component's platform base had no
+`attachInternals`, `attachShadow` or attributes. Reading `elementProperties`
+never noticed. Constructing a form control does, because its mixin attaches
+internals in the constructor. Prism now loads Lit from a component's own
+location first and installs the fallback only after.
+
+**Inline HTML examples could carry two `style` attributes on one element.**
+The inline variant added its computed styles as a second attribute beside one
+the template already set, and a browser keeps only the first. In the reference
+catalog, `arc-avatar-group`'s overflow counter showed when its template hid it,
+and `arc-description-list` lost its `--cols`. The two are now merged, with the
+element's own declarations last.
+
 ## 3.1.1 — 2026-08-22
 
 ### Fixed

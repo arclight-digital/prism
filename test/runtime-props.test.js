@@ -10,13 +10,16 @@
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveRuntimeProps } from '../src/runtime-props.js';
 import { parseComponent } from '../src/parser.js';
 import { strictFailures } from '../src/report.js';
 import { inheritFrom } from '../src/inherit.js';
+import { typedDefault } from '../src/generators/types.js';
+import { generateSvelte } from '../src/generators/svelte.js';
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'runtime');
 const INPUT = join(FIXTURES, 'input.js');
@@ -200,19 +203,22 @@ describe('a subclass that declares nothing of its own', () => {
     // emitter that puts defaults in the destructuring — `heading = ''` on the
     // base and a bare `heading` on the subclass. The union costs more quietly:
     // `size: string` instead of `size: 'sm' | 'md' | 'lg'`, in six sets of types.
+    //
+    // The defaults no longer need the ancestor: `super()` runs the base
+    // constructor, so a constructed subclass already starts where its base does.
+    // The union still does — words in a tag are on no instance.
     const meta = parse(MODAL, { runtime: modal.get(MODAL) });
     const prop = (name) => meta.props.find((p) => p.name === name);
-    expect(prop('heading').default).toBe('');
+    expect(prop('heading').default).toBe("''");
+    expect(prop('open').default).toBe('false');
+    expect(prop('size').default).toBe("'md'");
     expect(prop('size').values).toEqual([]);
 
     const { inherited } = inheritFrom(meta, parse(DIALOG, { runtime: modal.get(DIALOG) }));
 
-    expect(prop('heading').default).toBe("''");
-    expect(prop('open').default).toBe('false');
     expect(prop('size').values).toEqual(['sm', 'md', 'lg']);
-    expect(inherited).toEqual(
-      expect.arrayContaining(['defaults (open, heading, size)', 'documented types (size)'])
-    );
+    expect(inherited).toContain('documented types (size)');
+    expect(inherited.some((s) => s.startsWith('defaults'))).toBe(false);
   });
 
   it('does not leave what it inherited where the next parse reads it as its own', () => {
@@ -224,10 +230,9 @@ describe('a subclass that declares nothing of its own', () => {
     // own, and stop asking where it came from.
     const first = parse(MODAL, { runtime: modal.get(MODAL) });
     inheritFrom(first, parse(DIALOG, { runtime: modal.get(DIALOG) }));
-    expect(first.props.find((p) => p.name === 'heading').default).toBe("''");
+    expect(first.props.find((p) => p.name === 'size').values).toEqual(['sm', 'md', 'lg']);
 
     const second = parse(MODAL, { runtime: modal.get(MODAL) });
-    expect(second.props.find((p) => p.name === 'heading').default).toBe('');
     expect(second.props.find((p) => p.name === 'size').values).toEqual([]);
   });
 
@@ -403,5 +408,93 @@ describe('a component whose framework base classes have been minified', () => {
     // existed, and never includes `helper()` from the unrecognized base.
     expect(meta.methods).toEqual(['ownMethod']);
     expect(diagnostics.map((d) => d.code)).toContain('runtime-methods-unreadable');
+  });
+});
+
+describe('defaults read off a constructed instance', () => {
+  const GRID = join(FIXTURES, 'defaults.js');
+  const NEEDS_DOM = join(FIXTURES, 'needs-dom.js');
+  let resolved;
+  beforeAll(async () => {
+    resolved = await resolveRuntimeProps([GRID, NEEDS_DOM], {}, () => {});
+  });
+
+  const parseAs = (path, diagnostics = []) => {
+    const meta = parse(path, { runtime: resolved.get(path), diagnostics });
+    return { meta, prop: (name) => meta.props.find((p) => p.name === name) };
+  };
+
+  it('takes defaults a mixin constructor seeded from the declaration', () => {
+    // The consumer's case: no constructor line for any of these, so the source
+    // reader found nothing and every wrapper lost them.
+    const { prop } = parseAs(GRID);
+    expect(prop('density').default).toBe("'comfortable'");
+    expect(prop('striped').default).toBe('true');
+    expect(prop('columns').default).toBe('[]');
+  });
+
+  it('resolves a default the source only names', () => {
+    // `this.caption = SOME_CAPTION` read from source is the identifier, which a
+    // wrapper would have emitted as the string 'SOME_CAPTION'.
+    expect(parseAs(GRID).prop('caption').default).toBe("'Results'");
+  });
+
+  it('keeps the source spelling of a default the instance agrees with', () => {
+    // Turning runtime defaults on must not churn every wrapper's quoting.
+    expect(parseAs(GRID).prop('label').default).toBe('"Rows"');
+  });
+
+  it('carries plain data, and leaves out what has no literal', () => {
+    const { prop } = parseAs(GRID);
+    expect(prop('options').default).toBe('{"page":1,"sizes":[10,25]}');
+    expect(prop('max').default).toBe('Infinity');
+    // Read from source this was the string 'new Map()' in every wrapper.
+    expect(prop('lookup').default).toBe('');
+    expect(typedDefault(prop('lookup'))).toBeUndefined();
+  });
+
+  it('leaves out a default computed from the clock or from chance, and says so', () => {
+    const diagnostics = [];
+    const { prop } = parseAs(GRID, diagnostics);
+    expect(prop('month').default).toBe('');
+    expect(prop('seed').default).toBe('');
+
+    const unstable = diagnostics.find((d) => d.code === 'runtime-default-unstable');
+    expect(unstable).toMatchObject({ tag: 'arc-grid', props: ['month', 'seed'] });
+    expect(strictFailures(diagnostics)).toEqual([]);
+  });
+
+  it('falls back to the source for a class it cannot construct, and says so', () => {
+    const diagnostics = [];
+    const { prop } = parseAs(NEEDS_DOM, diagnostics);
+    expect(prop('tone').default).toBe("'neutral'");
+    expect(diagnostics.map((d) => d.code)).toContain('runtime-defaults-unreadable');
+    expect(strictFailures(diagnostics)).toEqual([]);
+  });
+
+  it('constructs a form control, whose mixin attaches internals', () => {
+    // Lit's node build binds to whatever `HTMLElement` exists when it loads, so
+    // this only holds if prism's bare fallback is installed after Lit is.
+    const diagnostics = [];
+    const meta = parse(INPUT, { runtime: runtime.get(INPUT), diagnostics });
+    expect(runtime.get(INPUT).classes.get('ArcInput').defaults).not.toBeNull();
+    expect(diagnostics.map((d) => d.code)).not.toContain('runtime-defaults-unreadable');
+    expect(meta.props.find((p) => p.name === 'confirmLabel').default).toBe("'OK'");
+  });
+
+  it('reaches the Svelte destructuring', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prism-defaults-'));
+    try {
+      const { meta } = parseAs(GRID);
+      const out = readFileSync(
+        generateSvelte(meta, { outDir: 'out', wcPackage: '@arc/ui', prefix: 'arc' }, dir).path, 'utf-8'
+      );
+      expect(out).toMatch(/density = 'comfortable'/);
+      expect(out).toMatch(/striped = true/);
+      expect(out).toMatch(/columns = \[\]/);
+      expect(out).not.toMatch(/month = /);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -132,6 +132,19 @@ describe('generateHTML — inline variant', () => {
     expect(content).toContain('<style>');
     expect(content).toContain(':hover');
   });
+
+  it('merges an element\'s own style into the inlined one instead of adding a second', () => {
+    // A browser keeps the first of two `style` attributes, so `--cols` was lost.
+    const meta = {
+      ...baseMeta,
+      css: `${baseMeta.css}\n.list { display: grid; }`,
+      template: '<div class="list" style="--cols: 1"><slot></slot></div>',
+    };
+    const content = readFileSync(generateHTML(meta, inlineConfig, tmpDir).results[1].path, 'utf-8');
+    const list = content.match(/<div[^>]*--cols[^>]*>/)[0];
+    expect(list.match(/\sstyle="/g)).toHaveLength(1);
+    expect(list).toMatch(/style="display: grid; --cols: 1"/);
+  });
 });
 
 describe('generateHTML — interactivity filtering', () => {

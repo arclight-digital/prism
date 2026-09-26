@@ -145,8 +145,9 @@ export function parseComponent(source, filePath, prefix = 'arc', overrides = {},
     source, filePath, opts.propsFrom, warn, tag, unparsed, runtime
   );
 
-  // Parse constructor defaults
+  // Parse constructor defaults, then let the instance answer where it can
   applyDefaults(props, source);
+  applyRuntimeDefaults(props, runtime, warn, tag, className);
 
   // Parse CSS from static styles
   const css = extractCSS(source);
@@ -735,6 +736,72 @@ function applyDefaults(props, source) {
     if (defaultMatch) {
       prop.default = defaultMatch[1].trim();
     }
+  }
+}
+
+/**
+ * Defaults read off a constructed instance, when `config.runtime` built one.
+ *
+ * The instance outranks the constructor's source for the same reason the class
+ * outranks the file for props: a default seeded by a mixin, set in a class
+ * field, or declared in a helper's options is on the instance and in no
+ * constructor this reader can match. Where the source spelled the same value,
+ * its spelling is kept, so turning this on changes no default that was
+ * already right. The one fallback is a class that would not construct, which
+ * keeps what its source says.
+ */
+function applyRuntimeDefaults(props, runtime, warn, tag, className) {
+  if (!runtime || runtime.defaults === undefined) return;
+  if (runtime.defaults === null) {
+    warn(
+      'runtime-defaults-unreadable',
+      `${tag}: config.runtime could not construct ${className} to read what its properties start as, so its ` +
+      'defaults were read from its constructor\'s source instead — a default set by a mixin, a class field or a ' +
+      'declaration helper is missing from its wrappers. The element still applies it at runtime.',
+      { tag }
+    );
+    return;
+  }
+
+  // Authoritative once the instance exists: a value it has no literal for — a
+  // Map, a computed default, nothing at all — clears what the source reader
+  // guessed, which would otherwise reach a wrapper as `'new Map()'`.
+  const { values, unstable } = runtime.defaults;
+  for (const prop of props) {
+    const spelled = values.get(prop.name);
+    if (spelled === undefined) prop.default = '';
+    else if (!(prop.default && sameLiteral(prop.default, spelled))) prop.default = spelled;
+  }
+
+  if (unstable.length > 0) {
+    warn(
+      'runtime-default-unstable',
+      `${tag}: ${unstable.map((n) => `"${n}"`).join(', ')} started differently on two instances of ${className} ` +
+      '(the second built with the clock moved), so the default is computed rather than declared. It is left ' +
+      'out of the wrappers, because a wrapper passes its default to the element and would freeze today\'s value; ' +
+      'the element computes its own.',
+      { tag, props: unstable }
+    );
+  }
+}
+
+/** Whether a source spelling is a literal for the same value as a runtime one. */
+function sameLiteral(sourceSpelling, runtimeSpelling) {
+  const a = literalValue(sourceSpelling);
+  const b = literalValue(runtimeSpelling);
+  return a.ok && b.ok && JSON.stringify(a.value) === JSON.stringify(b.value);
+}
+
+function literalValue(spelling) {
+  const s = spelling.trim();
+  try {
+    if (/^'.*'$/s.test(s)) {
+      const body = s.slice(1, -1).replace(/\\'/g, "'").replace(/(?<!\\)"/g, '\\"');
+      return { ok: true, value: JSON.parse(`"${body}"`) };
+    }
+    return { ok: true, value: JSON.parse(s) };
+  } catch {
+    return { ok: false };
   }
 }
 
