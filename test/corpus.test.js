@@ -149,7 +149,7 @@ describe('a component that moves state its consumer also holds', () => {
   });
 
   it('declares the prop bindable, so a parent copy can be written to', () => {
-    expect(output.svelte['arc-drawer']).toContain('open = $bindable(false)');
+    expect(output.svelte['arc-drawer']).toContain('open = $bindable()');
     expect(output.vue['arc-drawer']).toContain("'update:open': [value: boolean];");
     expect(output.angular['arc-drawer']).toContain('@Output() openChange = new EventEmitter<boolean>();');
   });

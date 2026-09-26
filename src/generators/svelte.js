@@ -90,10 +90,15 @@ export function generateSvelte(meta, config, root) {
   // $bindable() so the wrapper can write to them; this is backwards
   // compatible — a parent passing a plain value keeps working, the write
   // just stays local.
+  //
+  // Never with a fallback. Svelte 5 throws `props_invalid_value` on
+  // `bind:checked={undefined}` when the prop has one, and
+  // `let checked = $state(); <Checkbox bind:checked />` is the idiomatic way to
+  // write that binding. The fallback bought nothing in exchange: an undefined
+  // prop leaves the element on the default it applies itself.
   const destructured = [];
   for (const prop of meta.props) {
-    const def = svelteDefault(prop);
-    const init = boundProps.has(prop.name) ? `$bindable(${def ?? ''})` : def;
+    const init = boundProps.has(prop.name) ? '$bindable()' : svelteDefault(prop);
     const binding = renamed(prop.name)
       ? `${prop.name}: ${locals.get(prop.name)}`
       : prop.name;

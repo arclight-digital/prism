@@ -113,7 +113,10 @@ describe('generateSvelte — two-way bindings', () => {
 
   it('marks a prop $bindable when an event detail carries its name', () => {
     const content = generate(slider);
-    expect(content).toContain('value = $bindable(0)');
+    // No fallback, even though the prop has a default of 0: Svelte 5 throws on
+    // `bind:value={undefined}` against a prop that has one.
+    expect(content).toContain('value = $bindable()');
+    expect(content).not.toContain('$bindable(0)');
     // A prop no event writes back keeps its plain default.
     expect(content).toContain("label = ''");
     expect(content).not.toContain('label = $bindable');
@@ -132,7 +135,7 @@ describe('generateSvelte — two-way bindings', () => {
     expect(content).toContain("(rest['onarc-input'] as ((e: Event) => void) | undefined)?.(e);");
   });
 
-  it('emits $bindable() with no default when the prop has none', () => {
+  it('emits $bindable() when the prop has no default either', () => {
     const noDefault = {
       ...slider,
       props: [{ name: 'value', type: 'String', default: '', reflect: false, values: [] }],

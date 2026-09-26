@@ -43,6 +43,18 @@ constructed in Node keeps its source defaults and reports
 `runtime-defaults-unreadable`. Neither code fails `--strict`, because in both
 cases the element still applies its own default.
 
+### Changed
+
+**Svelte's `$bindable()` no longer carries a fallback.** Prism emitted
+`checked = $bindable(false)` whenever a bound prop had a default it could
+read. Svelte 5 throws `props_invalid_value` on `bind:checked={undefined}`
+against a prop with a fallback, and `let checked = $state(); <Checkbox
+bind:checked />` is the idiomatic way to write that binding. The throw was
+latent on 30 wrappers in the reference catalog, and runtime defaults would have
+extended it to 24 more. Every bindable prop is now `$bindable()`. The fallback
+never changed behaviour, since an undefined prop leaves the element on the
+default it applies itself. Props that aren't bound keep their defaults.
+
 ### Fixed
 
 **`config.runtime`'s fallback `HTMLElement` replaced Lit's own DOM shim.** Lit's
