@@ -1484,3 +1484,53 @@ describe('the element handle', () => {
     expect(describeMissingHandle('svelte', driven)).toContain('show() and dismiss()');
   });
 });
+
+describe('inline variant: which rules reach a style attribute', () => {
+  const inlineOf = (css, template, tag = 'arc-widget') => {
+    const widget = {
+      ...meta, tag, className: 'ArcWidget', pascalName: 'Widget', props: [], css, template, hostDisplay: 'block',
+    };
+    generateHTML(widget, { outDir: 'html', prefix: 'arc', inlineVariant: true }, tmpDir);
+    return readFileSync(join(tmpDir, 'html', 'widget.inline.html'), 'utf-8');
+  };
+
+  it('keeps a pseudo-element rule out of the element\'s own style', () => {
+    const out = inlineOf(
+      '.alert { position: relative; background: black; } .alert::before { content: \'\'; position: absolute; height: 2px; }',
+      '<div class="alert"><span class="alert__body">x</span></div>',
+    );
+    expect(out).toContain('class="alert" style="position: relative; background: black"');
+    expect(out).toMatch(/<style>[\s\S]*\.arc-widget \.alert::before \{ content: '';[\s\S]*<\/style>/);
+    expect(out).not.toMatch(/style="[^"]*height: 2px/);
+  });
+
+  it('applies a descendant rule only under the ancestor it names', () => {
+    const out = inlineOf(
+      '.wrapper { border-color: gray; } .group--error .wrapper { border-color: red; }',
+      '<div class="group"><div class="wrapper">x</div></div>',
+    );
+    expect(out).toContain('style="border-color: gray"');
+    expect(out).not.toContain('red');
+  });
+
+  it('matches each selector in a list, and elements with several classes', () => {
+    const out = inlineOf('.btn, a { display: inline-flex; }', '<button class="btn primary">x</button>');
+    expect(out).toContain('style="display: inline-flex"');
+  });
+
+  it('orders by specificity before source order', () => {
+    const out = inlineOf('.box.box--big { width: 2px; } .box { width: 1px; }', '<div class="box box--big">x</div>');
+    expect(out).toContain('style="width: 2px"');
+  });
+
+  it('leaves ::slotted rules out entirely', () => {
+    // Their light-DOM form, `.arc-widget *`, would match the component's own
+    // elements; in the example the slotted content is placeholder text.
+    const out = inlineOf(
+      '.grid { display: grid; } ::slotted(*) { aspect-ratio: 1 / 1; }',
+      '<div class="grid"><slot></slot></div>',
+    );
+    expect(out).toContain('style="display: grid"');
+    expect(out).not.toContain('aspect-ratio');
+  });
+});

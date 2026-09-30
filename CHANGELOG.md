@@ -1,5 +1,53 @@
 # Changelog
 
+## 3.3.1 — 2026-09-29
+
+### Fixed
+
+**The inline HTML variant applied rules to elements they don't match.** It
+compared only a selector's last part, against an element's whole `class`
+attribute, and then wrote everything it matched into that element's `style`.
+Four things followed from that, all present before 3.2. 3.3.0's resolved colors
+made them visible:
+
+- **A pseudo-element rule became the element's own style.** `.alert::before`
+  passed the check meant for `.alert:hover`, so its `position: absolute;
+  height: 2px` and gradient went onto the alert itself: the whole alert
+  rendered as a 2px bar. Every component that draws a `::before`/`::after`
+  line did the same.
+- **Ancestors were never checked.** `.input-group--error .input-group__wrapper`
+  applied to every wrapper, so the default input had a red error border.
+- **A selector list or an element with two classes matched nothing.** A
+  button's base rule is `.btn, a`, so the button example was a bare native
+  `<button>`.
+- **Other pseudo-classes were ignored.** `.x:disabled` or `.x:first-child`
+  applied as if `.x` alone had been written.
+
+Selectors are now matched against the example's markup as a tree
+(`src/selector-match.js`). A rule is inlined only when every part of it matches:
+types, classes, ids and `:not()`, through descendant and child combinators.
+Matches apply in cascade order, specificity first. A rule that depends on
+something static markup can't settle (a pseudo-class, a pseudo-element, a `+`
+or `~` sibling) goes to the example's `<style>` block for the browser to match,
+and the element keeps its classes so it can. A rule asking for an attribute a
+prop sets is a variant, and is left out, as before. `::slotted()` rules are left
+out entirely: the example has placeholder text where slotted content would be,
+and their light-DOM form (`.tag *`) matches the component's own elements.
+
+In the reference catalog, 44 of 88 inline examples change. alert, blockquote,
+card and others render as cards again, with their top line drawn by the
+`<style>` block. The input's border is gray. Button, page-header and others get
+styles that never reached them.
+
+**A `:host()` with more than one `:not([attr="value"])` prefixed its
+attributes twice.** `:host(:not([size="lg"]):not([size="sm"]))` became
+`.arc-button:not([data-data-size="lg"])…`, which a large button also matches, so
+the default size's rules applied to every size. This was in the standalone CSS
+bundle as well as the examples: 200 selectors across 15 files in the reference
+catalog. The attributes are now rewritten in one pass.
+
+**The inline variant threw when `html.baseCSS` was not set.**
+
 ## 3.3.0 — 2026-09-29
 
 ### Added

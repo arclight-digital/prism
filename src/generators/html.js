@@ -11,6 +11,9 @@ import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { HEADER_HTML as HEADER, isPrismGenerated, removeGenerated } from './header.js';
 import { loadTokenMap, readHostProperties, resolveTokens } from '../resolve-tokens.js';
+import {
+  compareSpecificity, elementOf, matchesSelector, parseSelector, specificity, splitSelectorList,
+} from '../selector-match.js';
 import { shadowToLight } from '../css-transform.js';
 
 /**
@@ -57,13 +60,6 @@ function parseCSSRules(css) {
     }
   }
   return rules;
-}
-
-/**
- * Check if a selector contains pseudo-class states that can't be represented inline.
- */
-function hasPseudoState(selector) {
-  return /:(?:hover|focus|focus-visible|focus-within|active|visited)\b/.test(selector);
 }
 
 /**
@@ -524,128 +520,151 @@ function generateHTMLExternal(meta, config, root) {
 
 /* ── Inline HTML generation ──────────────────────────────────── */
 
-/**
- * Check if a CSS selector matches an element.
- * Supports class selectors, descendant combinators, and attribute selectors.
- * @param {string} selector - CSS selector
- * @param {string} elementClass - The class on the element (e.g. 'badge', 'card__inner')
- * @param {string} hostClass - The host class (e.g. 'arc-badge')
- * @param {boolean} isHost - Whether this element IS the host wrapper
- * @returns {boolean}
- */
-function selectorMatchesElement(selector, elementClass, hostClass, isHost) {
-  const sel = selector.trim();
+/** Elements that never have children, so never become anyone's ancestor. */
+const VOID_ELEMENTS = new Set([
+  'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr',
+]);
 
-  if (isHost) {
-    // Host element: match selectors like `.arc-badge` (no descendant part)
-    // Must start with host class and NOT have a space (descendant combinator)
-    if (!sel.startsWith(`.${hostClass}`)) return false;
-    const rest = sel.slice(hostClass.length + 1);
-    // No descendant part — just attribute qualifiers or pseudo-classes
-    return !/\s/.test(rest);
-  } else {
-    // Inner element: match descendant selectors like `.arc-badge .badge`
-    if (!sel.startsWith(`.${hostClass}`)) return false;
-    if (!sel.includes(' ')) return false;
-    // Get the target part (after last space)
-    const parts = sel.split(/\s+/);
-    const target = parts[parts.length - 1];
-    // Check if target matches the element class
-    return target === `.${elementClass}` || target.startsWith(`.${elementClass}:`);
-  }
+/**
+ * `::slotted()` renamed so shadowToLight leaves it alone. Its light-DOM rewrite
+ * (`::slotted(*)` → `.tag *`) is right for the CSS bundle, where slotted
+ * content is the page's children; here it would match the component's own
+ * elements, so the inline variant has to know which selectors it came from.
+ */
+const SLOTTED_MARK = '::-prism-slotted(';
+
+const markSlotted = (css) => css.replaceAll('::slotted(', SLOTTED_MARK);
+
+/**
+ * Sort the component's rules by who decides whether they apply.
+ *
+ * A rule is inlined only where its whole selector can be matched against the
+ * example's markup (see selector-match.js). Everything that depends on state
+ * the markup can't settle — `:hover`, `::before`, `:first-child`, a sibling —
+ * goes to the `<style>` block, for the browser to match. Merging those into a
+ * style attribute applied them unconditionally: `.alert::before`'s
+ * `position: absolute; height: 2px` became the alert's own.
+ *
+ * A rule that asks for an attribute a prop sets is a variant, and the example
+ * sets no props, so it is left out.
+ *
+ * @returns {{ inline: object[], deferred: string[] }} `inline` in cascade
+ *   order: specificity, then source order
+ */
+function classifyRules(rules, hostClass) {
+  const inline = [];
+  const deferred = [];
+  const host = `.${hostClass}`;
+
+  rules.forEach((rule, order) => {
+    if (!rule.selector.startsWith(host)) return;
+    // Slotted content is the page's, and an example has placeholder text in its
+    // place. There is nothing for these to style, inline or in <style>, and
+    // their light-DOM form (`.tag *`) would match the component's own elements.
+    const selectors = splitSelectorList(rule.selector)
+      .filter((sel) => sel.startsWith(host) && !sel.includes(SLOTTED_MARK));
+    if (selectors.length === 0) return;
+    const whole = selectors.length === splitSelectorList(rule.selector).length;
+    if (rule.media) {
+      const selectorText = whole ? rule.selector : selectors.join(',\n    ');
+      deferred.push(`  ${rule.media} {\n    ${selectorText} { ${rule.declarations} }\n  }`);
+      return;
+    }
+    const dynamic = [];
+    for (const sel of selectors) {
+      const parsed = parseSelector(sel);
+      if (parsed.kind === 'dynamic') dynamic.push(sel);
+      else if (parsed.kind === 'static') {
+        inline.push({ parsed, spec: specificity(parsed), order, declarations: rule.declarations });
+      }
+    }
+    if (dynamic.length === 0) return;
+    const selectorText = whole && dynamic.length === selectors.length ? rule.selector : dynamic.join(',\n  ');
+    deferred.push(`  ${selectorText} { ${rule.declarations} }`);
+  });
+
+  inline.sort((x, y) => compareSpecificity(x.spec, y.spec) || x.order - y.order);
+  return { inline, deferred };
 }
 
 /**
- * Collect all inline styles for an element from CSS rules.
- * Only collects from rules without pseudo-states.
+ * The declarations every matching inlinable rule gives `el`, later rules
+ * winning. Transitions are left out: nothing in a static example changes.
  */
-function collectStyles(rules, elementClass, hostClass, isHost) {
+function collectStyles(inline, el, ancestors) {
   const props = new Map();
-
-  for (const rule of rules) {
-    if (hasPseudoState(rule.selector)) continue;
-    if (rule.media) continue; // Skip @media rules for inline styles
-    if (!selectorMatchesElement(rule.selector, elementClass, hostClass, isHost)) continue;
-
-    // Skip rules with attribute selectors (variant-specific) for default rendering
-    if (/\[[\w-]/.test(rule.selector)) continue;
-
-    for (const [p, v] of parseDeclarations(rule.declarations)) {
-      props.set(p, v);
-    }
+  for (const rule of inline) {
+    if (!matchesSelector(rule.parsed, el, ancestors)) continue;
+    for (const [p, v] of parseDeclarations(rule.declarations)) props.set(p, v);
   }
-
   if (props.size === 0) return '';
   return [...props.entries()].map(([p, v]) => `${p}: ${v}`).join('; ');
 }
 
-/**
- * Collect pseudo-state rules that need to go into a <style> block.
- * Returns CSS text for rules with :hover, :focus, etc.
- */
-function collectPseudoRules(rules, hostClass) {
-  const pseudoRules = [];
-
-  for (const rule of rules) {
-    const hasPseudo = hasPseudoState(rule.selector);
-    const hasMedia = !!rule.media;
-
-    if (!hasPseudo && !hasMedia) continue;
-
-    // Only include rules that target our component
-    if (!rule.selector.startsWith(`.${hostClass}`)) continue;
-
-    if (hasMedia) {
-      pseudoRules.push(`  ${rule.media} {\n    ${rule.selector} { ${rule.declarations} }\n  }`);
-    } else {
-      pseudoRules.push(`  ${rule.selector} { ${rule.declarations} }`);
-    }
+function parseAttributes(text) {
+  const attrs = new Map();
+  for (const m of (text ?? '').matchAll(/([^\s=/]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g)) {
+    attrs.set(m[1].toLowerCase(), m[2] ?? m[3] ?? m[4] ?? '');
   }
-
-  return pseudoRules;
+  return attrs;
 }
 
+const escapeRegExp = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 /**
- * Apply inline styles to HTML elements and build the <style> block.
- * For each element with a class, match CSS rules → write style="...".
- * Keeps class attributes on elements that have pseudo-state rules targeting them.
+ * Write each element's styles into its `style` attribute, and collect the rules
+ * the browser must match into the `<style>` block.
+ *
+ * The markup is walked as a tree, so a descendant selector is matched against
+ * the element's real ancestors, host included: `.input-group--error
+ * .input-group__wrapper` applies only inside an element that has that class.
+ * An element keeps its classes when a `<style>` rule names one of them, since
+ * that rule needs something to match.
  */
-function applyInlineStyles(html, rules, hostClass) {
-  const pseudoRules = collectPseudoRules(rules, hostClass);
+function applyInlineStyles(html, rules, hostClass, hostTagName) {
+  const { inline, deferred } = classifyRules(rules, hostClass);
+  const deferredText = deferred.join('\n');
+  const referenced = (cls) => new RegExp(`\\.${escapeRegExp(cls)}(?![\\w-])`).test(deferredText);
 
-  // Find all elements with class attributes and apply inline styles
-  let result = html.replace(
-    /<(\w+)(\s[^>]*)?\sclass="([^"]+)"([^>]*?)>/g,
-    (match, tagName, before, className, after) => {
-      before = before || '';
-      after = after || '';
-      const style = collectStyles(rules, className, hostClass, false);
+  const host = elementOf(hostTagName, new Map([['class', hostClass]]));
+  const hostStyle = collectStyles(inline, host, []);
 
-      // Check if any pseudo rules target this class — if so, keep the class
-      const hasPseudoTarget = pseudoRules.some((r) => r.includes(`.${className}:`));
-      const hasMediaTarget = pseudoRules.some((r) => r.includes(`.${className} `) || r.includes(`.${className}`));
-      const keepClass = hasPseudoTarget || hasMediaTarget;
-
-      // An element that already carries a `style` of its own — a custom
-      // property the template sets from a prop — gets one attribute, not two: a
-      // browser keeps the first and drops the second. Its own declarations go
-      // last, since an inline style beats the class rules these came from.
-      const own = [];
-      const stripOwn = (attrs) => attrs.replace(/\s+style="([^"]*)"/g, (_, value) => {
-        if (value.trim()) own.push(value.trim().replace(/;$/, ''));
-        return '';
-      });
-      before = stripOwn(before);
-      after = stripOwn(after);
-      const merged = [style, ...own].filter(Boolean).join('; ');
-
-      const classAttr = keepClass ? ` class="${className}"` : '';
-      const styleAttr = merged ? ` style="${merged}"` : '';
-      return `<${tagName}${before}${classAttr}${styleAttr}${after}>`;
+  const stack = [];
+  const TAG = /<!--[\s\S]*?-->|<\/([a-zA-Z][\w-]*)\s*>|<([a-zA-Z][\w-]*)((?:\s+[^\s=>/]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)*)(\s*\/?)>/g;
+  const result = html.replace(TAG, (match, close, open, attrText = '', tail) => {
+    if (close) {
+      const at = stack.map((e) => e.tag).lastIndexOf(close.toLowerCase());
+      if (at !== -1) stack.length = at;
+      return match;
     }
-  );
+    if (!open) return match; // a comment
 
-  return { html: result, pseudoRules };
+    const el = elementOf(open, parseAttributes(attrText));
+    const style = collectStyles(inline, el, [host, ...stack]);
+    if (!tail.includes('/') && !VOID_ELEMENTS.has(el.tag)) stack.push(el);
+
+    // An element that already carries a `style` of its own — a custom
+    // property the template sets from a prop — gets one attribute, not two: a
+    // browser keeps the first and drops the second. Its own declarations go
+    // last, since an inline style beats the class rules these came from.
+    const own = [];
+    let rest = attrText.replace(/\s+style="([^"]*)"/g, (_, value) => {
+      if (value.trim()) own.push(value.trim().replace(/;$/, ''));
+      return '';
+    });
+    const merged = [style, ...own].filter(Boolean).join('; ');
+    const styleAttr = merged ? ` style="${merged}"` : '';
+    const keepClass = [...el.classes].some(referenced);
+
+    if (/\sclass="[^"]*"/.test(rest)) {
+      rest = rest.replace(/\sclass="[^"]*"/, (classAttr) => (keepClass ? classAttr : '') + styleAttr);
+    } else {
+      rest += styleAttr;
+    }
+    return `<${open}${rest}${tail}>`;
+  });
+
+  return { html: result, pseudoRules: deferred, hostStyle };
 }
 
 /**
@@ -675,9 +694,9 @@ function generateHTMLInline(meta, config, root) {
   // replace the value. The class's assembled styles are read when
   // `config.runtime` supplied them, since a :host rule in an imported module is
   // in no file the source reader sees.
-  let componentCSS = shadowToLight(meta.css, meta.tag);
-  const baseCSSPath = join(root, config.baseCSS);
-  const tokenMap = config.baseCSS && existsSync(baseCSSPath) ? loadTokenMap(baseCSSPath) : new Map();
+  let componentCSS = shadowToLight(markSlotted(meta.css), meta.tag);
+  const baseCSSPath = config.baseCSS ? join(root, config.baseCSS) : null;
+  const tokenMap = baseCSSPath && existsSync(baseCSSPath) ? loadTokenMap(baseCSSPath) : new Map();
   const resolveMap = new Map(tokenMap);
   for (const [name, value] of meta.runtimeStyles ? readHostProperties(meta.runtimeStyles) : []) {
     if (!resolveMap.has(name)) resolveMap.set(name, value);
@@ -687,12 +706,8 @@ function generateHTMLInline(meta, config, root) {
   const rules = parseCSSRules(componentCSS);
   const innerHTML = templateToHTML(meta);
 
-  // Apply inline styles to inner elements
-  const { html: styledInner, pseudoRules } = applyInlineStyles(innerHTML, rules, meta.tag);
-
-  // Collect host styles
-  const hostStyle = collectStyles(rules, null, meta.tag, true);
   const tag = hostTag(meta);
+  const { html: styledInner, pseudoRules, hostStyle } = applyInlineStyles(innerHTML, rules, meta.tag, tag);
   const hostAttrs = [];
   hostAttrs.push(`class="${meta.tag}"`);
   if (hostStyle) hostAttrs.push(`style="${hostStyle}"`);

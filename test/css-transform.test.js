@@ -47,6 +47,17 @@ describe('shadowToLight', () => {
     expect(result).not.toContain('.arc-card(');
   });
 
+  it(':host with a valued :not() chain prefixes each attribute once', () => {
+    // Regression: `.arc-button:not([data-data-size="lg"])`, which a large
+    // button also matches, so the default size's rule applied to it.
+    const result = shadowToLight(
+      ':host(:not([size="lg"]):not([size="sm"])) .btn { height: 36px; }',
+      'arc-button',
+    );
+    expect(result).toContain('.arc-button:not([data-size="lg"]):not([data-size="sm"]) .btn');
+    expect(result).not.toContain('data-data-');
+  });
+
   it(':host with mixed attr + pseudo compound', () => {
     const result = shadowToLight(
       ':host([variant="pills"]:hover) { color: red; }',

@@ -37,10 +37,17 @@ export function shadowToLight(css, tag) {
   result = result.replace(
     /:host\(((?::not\(\[[^\]]+\]\)|\[[^\]]+\]|::?[a-z][\w-]*(?:\([^()]*\))?){2,})\)/g,
     (_m, inner) => {
-      const transformed = inner
-        .replace(/:not\(\[([\w-]+)=["']([^"']+)["']\]\)/g, ':not([data-$1="$2"])')
-        .replace(/:not\(\[([\w-]+)\]\)/g, ':not([data-$1])')
-        .replace(/\[([\w-]+)=["']([^"']+)["']\]/g, '[data-$1="$2"]');
+      // One pass, so an attribute is prefixed once. Three chained replaces
+      // prefixed `:not([size="lg"])` and then matched the `[data-size="lg"]`
+      // they had just written: `.tag:not([data-data-size="lg"])`, which holds
+      // for every element, large ones included.
+      const transformed = inner.replace(
+        /(:not\()?\[([\w-]+)(?:=["']([^"']+)["'])?\]/g,
+        (m, not = '', name, value) => {
+          if (value !== undefined) return `${not}[data-${name}="${value}"]`;
+          return not ? `${not}[data-${name}]` : m;
+        }
+      );
       return `.${tag}${transformed}`;
     }
   );
