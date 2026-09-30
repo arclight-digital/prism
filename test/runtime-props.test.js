@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
-import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,11 +20,13 @@ import { strictFailures } from '../src/report.js';
 import { inheritFrom } from '../src/inherit.js';
 import { typedDefault } from '../src/generators/types.js';
 import { generateSvelte } from '../src/generators/svelte.js';
+import { generateHTML } from '../src/generators/html.js';
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'runtime');
 const INPUT = join(FIXTURES, 'input.js');
 const BROKEN = join(FIXTURES, 'broken.js');
 const MINIFIED = join(FIXTURES, 'minified-base.js');
+const STATUS_BADGE = join(FIXTURES, 'status-badge.js');
 
 const parse = (path, opts = {}) =>
   parseComponent(readFileSync(path, 'utf-8'), path, 'arc', {}, opts.diagnostics ?? [], opts);
@@ -493,6 +495,46 @@ describe('defaults read off a constructed instance', () => {
       expect(out).toMatch(/striped = true/);
       expect(out).toMatch(/columns = \[\]/);
       expect(out).not.toMatch(/month = /);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('styles from the class', () => {
+  let statusRuntime;
+  beforeAll(async () => {
+    statusRuntime = await resolveRuntimeProps([STATUS_BADGE], {}, () => {});
+  });
+
+  it('reads the assembled styles, imported modules included', () => {
+    const { styles } = statusRuntime.get(STATUS_BADGE).classes.get('ArcStatusBadge');
+    expect(styles).toContain('--_status-rgb: var(--accent-rgb)');
+    expect(styles).toContain('.badge');
+  });
+
+  it('carries them on the meta only when the class was read', () => {
+    expect(parse(STATUS_BADGE, { runtime: statusRuntime.get(STATUS_BADGE) }).runtimeStyles).toContain('--_status-rgb');
+    expect(parse(STATUS_BADGE)).not.toHaveProperty('runtimeStyles');
+  });
+
+  it('resolves a host property from an imported module in the inline example', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prism-status-'));
+    try {
+      writeFileSync(join(dir, 'tokens.css'), ':root { --accent-rgb: 77, 126, 247; --error-rgb: 240, 69, 69; --space-xs: 4px; }');
+      const config = { outDir: 'html', prefix: 'arc', baseCSS: 'tokens.css', inlineVariant: true };
+
+      const meta = parse(STATUS_BADGE, { runtime: statusRuntime.get(STATUS_BADGE) });
+      generateHTML({ ...meta, interactivity: 'static' }, config, dir);
+      const inline = readFileSync(join(dir, 'html', 'status-badge.inline.html'), 'utf-8');
+      // The unconditional :host value, not the :host([variant]) one.
+      expect(inline).toContain('background: rgba(77, 126, 247, 0.1)');
+      expect(inline).toContain('padding: 4px');
+      expect(inline).not.toContain('var(--');
+
+      // Without the class, the imported module is out of reach, as before.
+      generateHTML({ ...parse(STATUS_BADGE), interactivity: 'static' }, config, dir);
+      expect(readFileSync(join(dir, 'html', 'status-badge.inline.html'), 'utf-8')).toContain('rgba(var(--_status-rgb), 0.1)');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

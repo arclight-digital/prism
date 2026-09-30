@@ -10,7 +10,7 @@
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { HEADER_HTML as HEADER, isPrismGenerated, removeGenerated } from './header.js';
-import { loadTokenMap, resolveTokens } from '../resolve-tokens.js';
+import { loadTokenMap, readHostProperties, resolveTokens } from '../resolve-tokens.js';
 import { shadowToLight } from '../css-transform.js';
 
 /**
@@ -667,13 +667,22 @@ function generateHTMLInline(meta, config, root) {
 
   mkdirSync(outDir, { recursive: true });
 
-  // Convert shadow→light CSS then resolve all tokens to literal values
+  // Convert shadow→light CSS then resolve all tokens to literal values.
+  //
+  // A property the component sets on its own host is resolvable too, but only
+  // where no token has the name: the tokens are what the page supplies, and a
+  // component's :host copy of one exists to receive a page override, not to
+  // replace the value. The class's assembled styles are read when
+  // `config.runtime` supplied them, since a :host rule in an imported module is
+  // in no file the source reader sees.
   let componentCSS = shadowToLight(meta.css, meta.tag);
   const baseCSSPath = join(root, config.baseCSS);
-  if (existsSync(baseCSSPath)) {
-    const tokenMap = loadTokenMap(baseCSSPath);
-    componentCSS = resolveTokens(componentCSS, tokenMap);
+  const tokenMap = config.baseCSS && existsSync(baseCSSPath) ? loadTokenMap(baseCSSPath) : new Map();
+  const resolveMap = new Map(tokenMap);
+  for (const [name, value] of meta.runtimeStyles ? readHostProperties(meta.runtimeStyles) : []) {
+    if (!resolveMap.has(name)) resolveMap.set(name, value);
   }
+  if (resolveMap.size > 0) componentCSS = resolveTokens(componentCSS, resolveMap);
 
   const rules = parseCSSRules(componentCSS);
   const innerHTML = templateToHTML(meta);

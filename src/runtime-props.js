@@ -207,7 +207,7 @@ function readMethods(Ctor) {
  * ordinary answer here, not an error.
  *
  * @returns {{ props: import('./parser.js').PropMeta[], formAssociated: boolean,
- *   methods: string[] }|null}
+ *   methods: string[], styles: string|null }|null}
  */
 function readClass(Ctor) {
   let declarations;
@@ -243,7 +243,36 @@ function readClass(Ctor) {
     formAssociated: Ctor.formAssociated === true,
     methods: readMethods(Ctor),
     defaults: readInitialValues(Ctor, props.map((p) => p.name)),
+    styles: readStyles(Ctor),
   };
+}
+
+/**
+ * The class's stylesheet as Lit assembled it: `static styles` flattened, with
+ * every imported `css` module and every superclass's styles in it. The source
+ * reader sees only the `css` literals written in the component's own file, so
+ * a property a shared module sets on `:host` (arc-ui's `statusVars`) was
+ * invisible to it.
+ *
+ * Only a CSSResult carries its text; a constructed CSSStyleSheet in the list is
+ * skipped rather than serialized, since Node has none and a DOM shim's may not
+ * round-trip.
+ *
+ * @returns {string|null} null when the class has no readable styles
+ */
+function readStyles(Ctor) {
+  let styles;
+  try {
+    styles = Ctor.elementStyles;
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(styles)) return null;
+  const text = styles
+    .map((style) => (typeof style?.cssText === 'string' ? style.cssText : ''))
+    .filter(Boolean)
+    .join('\n');
+  return text || null;
 }
 
 /**

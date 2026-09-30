@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadTokenMap, resolveTokens } from '../src/resolve-tokens.js';
+import { loadTokenMap, readHostProperties, resolveTokens } from '../src/resolve-tokens.js';
 
 function tokenMapOf(css) {
   const dir = mkdtempSync(join(tmpdir(), 'prism-tokens-'));
@@ -194,5 +194,18 @@ describe('resolveTokens with a CSS-wide keyword in the map', () => {
       'height: calc(100vh - var(--space-md));',
     );
     expect(resolveTokens('gap: var(--space-md, 16px);', map)).toBe('gap: 16px;');
+  });
+});
+
+describe('readHostProperties', () => {
+  it('reads only unconditional :host rules', () => {
+    const map = readHostProperties(`
+      :host { --_status-rgb: var(--accent-rgb); display: block; }
+      :host([variant="error"]) { --_status-rgb: var(--error-rgb); }
+      @media (hover: hover) { :host { --_status-rgb: 1, 2, 3; } }
+      .badge { --_inner: 4px; }
+      :host { --_reset: inherit; }
+    `);
+    expect([...map]).toEqual([['--_status-rgb', 'var(--accent-rgb)']]);
   });
 });

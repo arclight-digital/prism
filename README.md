@@ -148,7 +148,7 @@ Each framework section (`react`, `vue`, `svelte`, `angular`, `solid`, `preact`) 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `html.outDir` | `string` | *required* | Output directory for HTML snippets |
-| `html.baseCSS` | `string` | — | Design-tokens CSS, used by the inline variant to resolve `var()` |
+| `html.baseCSS` | `string` | — | Design-tokens CSS, used by the inline variant to resolve `var()`. Tokens are read from unconditional `:root`/`html` rules only |
 | `html.inlineVariant` | `boolean` | `false` | Also generate `.inline.html` files with tokens resolved and styles inlined |
 | `css.outDir` | `string` | *required* | Output directory for per-component CSS and the `{prefix}-ui.css` bundle |
 | `css.baseCSS` | `string` | — | Design-tokens CSS, included as a `:root` block in the bundle |
@@ -423,6 +423,8 @@ runtime: { setup: './scripts/dom-shim.js' },
 ```
 
 **It's opt-in because reading the class means importing the module, and importing runs it** — a config file is the right place to say yes to that. Lit 3 carries its own DOM shim, so most projects need no `setup`; the option exists for components that touch a browser global at module scope. It degrades rather than fails: a module that throws on import costs that one component its runtime answer (reported as `runtime-unavailable`) and falls back to the source reader.
+
+`runtime` also answers for **styles**. The inline HTML variant resolves a `var()` against the tokens in `html.baseCSS` first. A name that isn't a token then falls back to the value the component's unconditional `:host` rule gives it, read from the class's assembled `elementStyles`. That covers a private property set by a shared style module the component imports (`static styles = [statusVars, css…]`), which is in no file prism reads. Conditional rules like `:host([variant="error"])` aren't read, so an example gets the value an element with no attributes set has.
 
 `runtime` also answers for **methods**: `checkValidity()` contributed by a form-control mixin is a method of the element and of no file prism reads, and what a component's methods are is what decides whether its wrappers hand back a handle.
 

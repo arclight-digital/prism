@@ -27,6 +27,9 @@
  * @property {string} tier - e.g. 'reactive', 'content'
  * @property {PropMeta[]} props
  * @property {string} css - raw CSS string from static styles
+ * @property {string} [runtimeStyles] - the class's styles as Lit assembled them,
+ *   imported modules and superclasses included; only when `config.runtime`
+ *   read the class and it had any
  * @property {string} template - raw HTML string from render()
  * @property {string[]} events - custom event names
  * @property {Record<string, string[]>} eventDetails - event name → keys of its `detail` object
@@ -219,6 +222,7 @@ export function parseComponent(source, filePath, prefix = 'arc', overrides = {},
     eventWrites, methods,
     slots, slotsInMarkup, hasDefaultSlot, noDefaultSlot, interactivity, classification, hostDisplay,
     formAssociated,
+    ...(runtime?.styles ? { runtimeStyles: runtime.styles } : {}),
   };
 }
 

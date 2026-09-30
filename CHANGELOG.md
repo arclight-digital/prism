@@ -1,5 +1,43 @@
 # Changelog
 
+## 3.3.0 — 2026-09-29
+
+### Added
+
+**With `config.runtime` on, the inline HTML variant reads the component's styles
+from the class.** Lit assembles `static styles` into `Ctor.elementStyles`,
+including every imported `css` module and every superclass's styles. The source
+reader sees only the `css` literals written in the component's own file, so a
+property that a shared module sets on the host was invisible to it:
+
+```js
+// status-styles.js
+export const statusVars = css`:host { --_status-rgb: var(--accent-primary-rgb); } …`;
+// alert.js
+static styles = [tokenStyles, statusVars, css`… rgba(var(--_status-rgb), 0.08) …`];
+```
+
+```css
+- background: rgba(var(--_status-rgb), 0.08);
++ background: rgba(77, 126, 247, 0.08);
+```
+
+A `var()` still resolves against `html.baseCSS` first. A name that isn't a token
+then falls back to the value in the component's unconditional `:host` rules.
+Tokens win because a component's `:host` copy of a token exists to receive a
+page's override, not to replace the value. Conditional rules
+(`:host([variant="error"])`, `@media`) aren't read, so an example gets the value
+an element with no attributes set has.
+
+In the reference catalog this left **zero unresolved `var()`s** across 195
+inline examples, down from 8, and changed 5 of them. In alert, badge and tag,
+the status tint, border and glow were being dropped and now render. In
+feature-card and stat, the lobe gradient used its `var()` fallback, the border
+gray, because the component's own `--lobe-rgb` was never read. It's now the
+accent, which is what the element renders.
+
+Without `runtime`, nothing changes: the inline variant has no class to read.
+
 ## 3.2.2 — 2026-09-29
 
 ### Fixed

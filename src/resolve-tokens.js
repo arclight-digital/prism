@@ -28,14 +28,37 @@ const isCSSWideKeyword = (value) => CSS_WIDE_KEYWORDS.has(value.trim().toLowerCa
  * @returns {Map<string, string>}
  */
 export function loadTokenMap(cssPath) {
-  const css = readFileSync(cssPath, 'utf-8');
+  return readUnconditionalProperties(readFileSync(cssPath, 'utf-8'), /^(?::root|html)$/i);
+}
+
+/**
+ * The custom properties a component's unconditional `:host` rules declare.
+ *
+ * A component can set a private property on its own host (`--_status-rgb`) and
+ * read it further down its stylesheet. That value is the component's, not a
+ * token, so it is in no base stylesheet; it is only in the component's styles,
+ * which may come from a module the component imports. `:host([variant=…])`
+ * and other conditional rules are left out, the same as for tokens: the
+ * unconditional rule is the value an element with no attributes set has.
+ *
+ * @param {string} css - a component's shadow CSS, `:host` selectors intact
+ * @returns {Map<string, string>}
+ */
+export function readHostProperties(css) {
+  return readUnconditionalProperties(css, /^:host$/i);
+}
+
+/**
+ * Custom properties declared in rules whose selector list includes one that
+ * `selector` matches, with no enclosing condition but `@layer`. Later
+ * declarations win, as in the cascade; CSS-wide keywords are never a value.
+ */
+function readUnconditionalProperties(css, selector) {
   const map = new Map();
 
-  const isRootSelector = (prelude) =>
-    prelude.split(',').some((selector) => /^(?::root|html)$/i.test(selector.trim()));
-  const inTokenScope = (preludes) =>
+  const inScope = (preludes) =>
     preludes.length > 0 &&
-    isRootSelector(preludes[preludes.length - 1]) &&
+    preludes[preludes.length - 1].split(',').some((s) => selector.test(s.trim())) &&
     preludes.slice(0, -1).every((prelude) => /^@layer\b/i.test(prelude));
 
   const preludes = [];
@@ -45,7 +68,7 @@ export function loadTokenMap(cssPath) {
   const declare = () => {
     const match = /^(--[\w-]+)\s*:([\s\S]*)$/.exec(buffer.trim());
     buffer = '';
-    if (!match || !inTokenScope(preludes)) return;
+    if (!match || !inScope(preludes)) return;
     const value = match[2].replace(/!important\s*$/i, '').trim().replace(/\s+/g, ' ');
     if (value && !isCSSWideKeyword(value)) map.set(match[1], value);
   };
