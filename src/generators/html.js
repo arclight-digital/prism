@@ -10,7 +10,7 @@
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { HEADER_HTML as HEADER, isPrismGenerated, removeGenerated } from './header.js';
-import { loadTokenMap, readHostProperties, resolveTokens } from '../resolve-tokens.js';
+import { loadTokenMap, readHostProperties, readPageDefaults, resolveTokens } from '../resolve-tokens.js';
 import {
   compareSpecificity, elementOf, matchesSelector, parseSelector, specificity, splitSelectorList,
 } from '../selector-match.js';
@@ -536,6 +536,38 @@ const SLOTTED_MARK = '::-prism-slotted(';
 const markSlotted = (css) => css.replaceAll('::slotted(', SLOTTED_MARK);
 
 /**
+ * Mark every declaration in a `<style>` rule `!important`.
+ *
+ * The rules there are the ones the browser matches — `:hover`, `:focus`,
+ * `@media`, `:first-child` — and each competes with declarations this variant
+ * wrote into a `style` attribute, which beats any selector. In the component's
+ * own stylesheet the state rule wins by specificity (`.btn:hover` over `.btn`),
+ * so without this a hover change to a property the element sets inline never
+ * showed. `!important` restores that outcome: it beats an inline declaration
+ * that isn't itself important.
+ */
+function important(declarations) {
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < declarations.length; i++) {
+    const ch = declarations[i];
+    if (ch === '(') depth++;
+    else if (ch === ')') depth--;
+    else if (ch === ';' && depth === 0) {
+      parts.push(declarations.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(declarations.slice(start));
+  return parts
+    .map((d) => d.trim())
+    .filter(Boolean)
+    .map((d) => (/!important$/i.test(d) ? d : `${d} !important`))
+    .join('; ') + ';';
+}
+
+/**
  * Sort the component's rules by who decides whether they apply.
  *
  * A rule is inlined only where its whole selector can be matched against the
@@ -567,7 +599,7 @@ function classifyRules(rules, hostClass) {
     const whole = selectors.length === splitSelectorList(rule.selector).length;
     if (rule.media) {
       const selectorText = whole ? rule.selector : selectors.join(',\n    ');
-      deferred.push(`  ${rule.media} {\n    ${selectorText} { ${rule.declarations} }\n  }`);
+      deferred.push(`  ${rule.media} {\n    ${selectorText} { ${important(rule.declarations)} }\n  }`);
       return;
     }
     const dynamic = [];
@@ -580,7 +612,7 @@ function classifyRules(rules, hostClass) {
     }
     if (dynamic.length === 0) return;
     const selectorText = whole && dynamic.length === selectors.length ? rule.selector : dynamic.join(',\n  ');
-    deferred.push(`  ${selectorText} { ${rule.declarations} }`);
+    deferred.push(`  ${selectorText} { ${important(rule.declarations)} }`);
   });
 
   inline.sort((x, y) => compareSpecificity(x.spec, y.spec) || x.order - y.order);
@@ -694,7 +726,11 @@ function generateHTMLInline(meta, config, root) {
   // replace the value. The class's assembled styles are read when
   // `config.runtime` supplied them, since a :host rule in an imported module is
   // in no file the source reader sees.
-  let componentCSS = shadowToLight(markSlotted(meta.css), meta.tag);
+  //
+  // With `config.runtime`, the class's own stylesheet is the rule source as well:
+  // a component styled partly by an imported module (arc-ui's card takes its
+  // surface from `cardHoverStyles`) has those rules in no file prism reads.
+  let componentCSS = shadowToLight(markSlotted(meta.runtimeStyles ?? meta.css), meta.tag);
   const baseCSSPath = config.baseCSS ? join(root, config.baseCSS) : null;
   const tokenMap = baseCSSPath && existsSync(baseCSSPath) ? loadTokenMap(baseCSSPath) : new Map();
   const resolveMap = new Map(tokenMap);
@@ -707,7 +743,28 @@ function generateHTMLInline(meta, config, root) {
   const innerHTML = templateToHTML(meta);
 
   const tag = hostTag(meta);
-  const { html: styledInner, pseudoRules, hostStyle } = applyInlineStyles(innerHTML, rules, meta.tag, tag);
+  const { html: styledInner, pseudoRules, hostStyle: componentHostStyle } = applyInlineStyles(
+    innerHTML, rules, meta.tag, tag
+  );
+
+  // The page's inherited defaults go on the example's root, under the host's
+  // own declarations: the root stands in for the page the component would sit
+  // on, so what the component sets itself still wins.
+  const pageCSSPath = config.pageCSS ? join(root, config.pageCSS) : baseCSSPath;
+  const hostDeclarations = new Map();
+  if (pageCSSPath && existsSync(pageCSSPath)) {
+    for (const [name, value] of readPageDefaults(readFileSync(pageCSSPath, 'utf-8'))) {
+      hostDeclarations.set(name, resolveMap.size > 0 ? resolveTokens(value, resolveMap) : value);
+    }
+  }
+  for (const [name, value] of parseDeclarations(componentHostStyle)) {
+    // A component's `:host` copy of a token is there to take a page override,
+    // and every value that read it is already resolved; on the root it would
+    // only repeat the token file, once per token.
+    if (name.startsWith('--') && tokenMap.has(name)) continue;
+    hostDeclarations.set(name, value);
+  }
+  const hostStyle = [...hostDeclarations].map(([name, value]) => `${name}: ${value}`).join('; ');
   const hostAttrs = [];
   hostAttrs.push(`class="${meta.tag}"`);
   if (hostStyle) hostAttrs.push(`style="${hostStyle}"`);

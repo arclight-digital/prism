@@ -8,4 +8,5 @@ export const statusVars = css`
   :host([variant="error"]) {
     --_status-rgb: var(--error-rgb);
   }
+  .badge { border-radius: 4px; }
 `;

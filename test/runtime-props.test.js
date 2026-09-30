@@ -530,6 +530,8 @@ describe('styles from the class', () => {
       // The unconditional :host value, not the :host([variant]) one.
       expect(inline).toContain('background: rgba(77, 126, 247, 0.1)');
       expect(inline).toContain('padding: 4px');
+      // A rule the imported module writes, not just the properties it sets.
+      expect(inline).toContain('border-radius: 4px');
       expect(inline).not.toContain('var(--');
 
       // Without the class, the imported module is out of reach, as before.

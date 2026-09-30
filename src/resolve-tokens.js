@@ -49,11 +49,44 @@ export function readHostProperties(css) {
 }
 
 /**
- * Custom properties declared in rules whose selector list includes one that
+ * What a page gives every element on it by inheritance: the inherited
+ * properties its unconditional `html` and `body` rules set, `body` winning as
+ * the nearer ancestor.
+ *
+ * A component that sets no font or color of its own takes the page's, so in a
+ * standalone example, with no page around it, it falls back to the browser's
+ * serif and black. Only inherited properties are read: a `body` background or
+ * `min-height` belongs to the page, not to anything placed on it.
+ *
+ * @param {string} css - a stylesheet with the page's `html`/`body` rules
+ * @returns {Map<string, string>} property → value, `var()`s unresolved
+ */
+export function readPageDefaults(css) {
+  const html = readUnconditionalProperties(css, /^html$/i, { custom: false });
+  const body = readUnconditionalProperties(css, /^body$/i, { custom: false });
+  const defaults = new Map();
+  for (const [name, value] of [...html, ...body]) {
+    if (INHERITED.has(name)) defaults.set(name, value);
+  }
+  return defaults;
+}
+
+/** Inherited properties a page's `html`/`body` rules commonly set. */
+const INHERITED = new Set([
+  'color', 'font', 'font-family', 'font-size', 'font-weight', 'font-style', 'font-variant', 'font-stretch',
+  'font-feature-settings', 'font-variation-settings', 'font-kerning', 'font-optical-sizing', 'line-height',
+  'letter-spacing', 'word-spacing', 'text-align', 'text-transform', 'text-indent', 'text-rendering',
+  'text-shadow', 'text-wrap', 'white-space', 'direction', 'hyphens', 'tab-size', 'quotes', 'color-scheme',
+  'accent-color', 'caret-color', 'cursor', '-webkit-font-smoothing', '-moz-osx-font-smoothing',
+]);
+
+/**
+ * Properties declared in rules whose selector list includes one that
  * `selector` matches, with no enclosing condition but `@layer`. Later
  * declarations win, as in the cascade; CSS-wide keywords are never a value.
+ * Only custom properties unless `custom` is false.
  */
-function readUnconditionalProperties(css, selector) {
+function readUnconditionalProperties(css, selector, { custom = true } = {}) {
   const map = new Map();
 
   const inScope = (preludes) =>
@@ -66,7 +99,7 @@ function readUnconditionalProperties(css, selector) {
   let parens = 0;
 
   const declare = () => {
-    const match = /^(--[\w-]+)\s*:([\s\S]*)$/.exec(buffer.trim());
+    const match = (custom ? /^(--[\w-]+)\s*:([\s\S]*)$/ : /^(-{0,2}[\w-]+)\s*:([\s\S]*)$/).exec(buffer.trim());
     buffer = '';
     if (!match || !inScope(preludes)) return;
     const value = match[2].replace(/!important\s*$/i, '').trim().replace(/\s+/g, ' ');

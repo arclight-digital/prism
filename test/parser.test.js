@@ -1710,3 +1710,35 @@ describe('the methods a consumer calls', () => {
     expect(meta.methods).toEqual(['show']);
   });
 });
+
+describe('css literals are read as Lit reads them', () => {
+  const cssOf = (styles) => parseComponent(
+    `/** @tag arc-q */\nexport class ArcQ extends LitElement {\n  static styles = css\`${styles}\`;\n}`, 'q.js', 'arc', {}, [],
+  ).css;
+
+  it('cooks JavaScript escapes into CSS escapes', () => {
+    // Raw, `'\\u201C'` is CSS for the letter u and then "201C": every user of
+    // the CSS bundle saw "u201C" where the blockquote's quote mark belongs.
+    expect(cssOf("a::after { content: '\\u201C'; }")).toBe("a::after { content: '\\201C '; }");
+    expect(cssOf("a::after { content: '\\u{1F600}\\x41\\n'; }")).toBe("a::after { content: '\\1F600 A\\A '; }");
+  });
+
+  it('keeps a CSS escape written for CSS, and interpolations as written', () => {
+    expect(cssOf("a::after { content: '\\\\201D'; } b { width: ${w}px; }")).toBe("a::after { content: '\\201D'; } b { width: ${w}px; }");
+  });
+});
+
+describe('an attribute bound to a string built in render()', () => {
+  it('keeps the static part of the string', () => {
+    const src = [
+      '/** @tag arc-card */',
+      'export class ArcCard extends LitElement {',
+      '  render() {',
+      "    const classes = `card${this._linked ? ' card--linked' : ''}`;",
+      '    return html`<div class=${classes}><slot></slot></div>`;',
+      '  }',
+      '}',
+    ].join('\n');
+    expect(parseComponent(src, 'card.js', 'arc', {}, []).template).toContain(`class="card\${this._linked ? ' card--linked' : ''}"`);
+  });
+});

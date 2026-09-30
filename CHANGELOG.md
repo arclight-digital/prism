@@ -1,5 +1,52 @@
 # Changelog
 
+## 3.4.0 — 2026-09-29
+
+### Added
+
+**Inline examples take the page's inherited defaults.** A component that sets
+no font or color takes the page's. A standalone example has no page, so it fell
+back to the browser's serif and black: text that was invisible on a dark frame.
+The inherited properties (font, color, line-height, font smoothing and so on)
+that the unconditional `html` and `body` rules set now go on each example's
+root. They come from the new `html.pageCSS`, or from `html.baseCSS` when it's
+not set. The component's own host declarations still win. A background, a
+`min-height` and anything else not inherited stay with the page.
+
+**A `<style>` state rule overrides the inline value it competes with.** The
+inline variant writes the default state into `style` attributes and leaves
+`:hover`, `:focus`, `@media` and the like to a `<style>` block. An inline
+declaration beats any selector, so a hover change to a border color or shadow
+the element also set inline never showed. Rules in the `<style>` block are now
+`!important`, which gives the same result as the component's own stylesheet,
+where `.btn:hover` beats `.btn` on specificity.
+
+**With `config.runtime` on, the inline variant builds its rules from the
+class's styles.** 3.3.0 read `elementStyles` only to resolve private
+properties. A component styled partly by an imported module has those rules in
+no file prism reads: arc-ui's card takes its surface, border and radius from
+`cardHoverStyles`, and its example had none of them. The class's `:host` copies
+of tokens are left off the root, since every value that read them is already
+resolved.
+
+### Fixed
+
+**JavaScript escapes in a `css` literal reached CSS unconverted.** Lit builds
+the stylesheet from the cooked string, so `content: '\u201C'` is a quote mark
+in the browser. prism copied it raw, and in CSS `\u201C` is the letter `u`
+followed by `201C`. That was in the standalone CSS bundle as well as the
+examples: every user of the reference catalog's HTML package saw "u201C" where
+the blockquote's opening quote belongs. `css` literals are now cooked the way
+Lit cooks them. A character outside printable ASCII is written as a CSS escape
+(`\201C `), so the output doesn't depend on the file's encoding. A CSS escape
+written for CSS (`'\\201D'`) becomes the `\201D` it meant.
+
+**An attribute bound to a string built in `render()` was dropped.** For
+`class=${classes}` with ``const classes = `card${this._linked ? ' card--linked' : ''}` ``,
+prism couldn't read the binding, so it removed the attribute and the element
+lost every rule its class carries. The binding now takes the local's string and
+resolves like a quoted attribute written in place: `class="card"`.
+
 ## 3.3.1 — 2026-09-29
 
 ### Fixed

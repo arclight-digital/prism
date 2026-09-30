@@ -952,13 +952,80 @@ function applyDocTypes(props, source, warn, tag, unparsed = new Set()) {
  */
 function extractCSS(source) {
   const cssBlocks = [];
-  // Match css`...` template literals (handle nested backticks carefully)
-  const cssPattern = /css`([\s\S]*?)`/g;
+  const cssPattern = /css`/g;
   let match;
   while ((match = cssPattern.exec(source)) !== null) {
-    cssBlocks.push(match[1]);
+    const { text, end } = cookCSSLiteral(source, match.index + match[0].length);
+    cssBlocks.push(text);
+    cssPattern.lastIndex = end;
   }
   return cssBlocks.join('\n');
+}
+
+/**
+ * The text a `css` template literal gives Lit, from just past its opening
+ * backtick: JavaScript escapes cooked, `${…}` kept as written.
+ *
+ * Lit builds the stylesheet from the cooked strings, so `content: '\u201C'` in
+ * source is a quote mark in the browser. Copied through raw, the same text is a
+ * CSS escape of the letter `u` followed by `201C`. A cooked character that isn't
+ * printable ASCII is written as a CSS escape (`\201C `) rather than the character
+ * itself, so the output reads the same in a file of any encoding, and a CSS
+ * escape written in source (`'\\201C'`) becomes the `\201C` it meant.
+ *
+ * @returns {{ text: string, end: number }} `end` is past the closing backtick
+ */
+function cookCSSLiteral(source, start) {
+  const cssEscape = (code) => `\\${code.toString(16).toUpperCase()} `;
+  const printable = (code) => (code >= 0x20 && code < 0x7f ? String.fromCharCode(code) : cssEscape(code));
+  const SIMPLE = { n: 0x0a, t: 0x09, r: 0x0d, f: 0x0c, v: 0x0b, b: 0x08, 0: 0 };
+
+  let text = '';
+  let i = start;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === '`') return { text, end: i + 1 };
+    if (ch === '$' && source[i + 1] === '{') {
+      let depth = 1;
+      let j = i + 2;
+      while (j < source.length && depth > 0) {
+        if (source[j] === '{') depth++;
+        else if (source[j] === '}') depth--;
+        j++;
+      }
+      text += source.slice(i, j);
+      i = j;
+      continue;
+    }
+    if (ch !== '\\') {
+      text += ch;
+      i++;
+      continue;
+    }
+    const next = source[i + 1];
+    let m;
+    if (next === 'u' && (m = /^u\{([0-9a-fA-F]+)\}/.exec(source.slice(i + 1)))) {
+      text += printable(parseInt(m[1], 16));
+      i += 1 + m[0].length;
+    } else if (next === 'u' && (m = /^u([0-9a-fA-F]{4})/.exec(source.slice(i + 1)))) {
+      text += printable(parseInt(m[1], 16));
+      i += 1 + m[0].length;
+    } else if (next === 'x' && (m = /^x([0-9a-fA-F]{2})/.exec(source.slice(i + 1)))) {
+      text += printable(parseInt(m[1], 16));
+      i += 1 + m[0].length;
+    } else if (next in SIMPLE) {
+      text += cssEscape(SIMPLE[next]);
+      i += 2;
+    } else if (next === '\r' || next === '\n') {
+      // A line continuation cooks to nothing.
+      i += next === '\r' && source[i + 2] === '\n' ? 3 : 2;
+    } else {
+      // `\\`, `\``, `\$`, `\'` and any other character cook to the character.
+      text += next ?? '';
+      i += 2;
+    }
+  }
+  return { text, end: i };
 }
 
 /**
@@ -1378,6 +1445,19 @@ function extractTemplate(source, defaults = {}) {
     );
     template = template.replace(new RegExp(`\\$\\{${name}\\}`, 'g'), dedented);
   }
+
+  // An attribute bound to a local built as a string — `class=${classes}` with
+  // `const classes = \`card${this._linked ? ' card--linked' : ''}\`` — takes
+  // that string, quoted, and resolves like a quoted attribute written in place:
+  // its static part stays and a condition on a prop is evaluated. Unresolved,
+  // the binding dropped the whole attribute, and the card lost every rule its
+  // `card` class carries.
+  template = template.replace(/(\s[\w-]+)=\$\{(\w+)\}/g, (whole, attr, name) => {
+    const init = locals.get(name)?.trim();
+    const literal = init && (/^`([\s\S]*)`$/.exec(init) ?? /^'([^'\\]*)'$/.exec(init) ?? /^"([^"\\]*)"$/.exec(init));
+    if (!literal || literal[1].includes('"')) return whole;
+    return `${attr}="${literal[1]}"`;
+  });
 
   return template;
 }

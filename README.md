@@ -150,6 +150,7 @@ Each framework section (`react`, `vue`, `svelte`, `angular`, `solid`, `preact`) 
 | `html.outDir` | `string` | *required* | Output directory for HTML snippets |
 | `html.baseCSS` | `string` | — | Design-tokens CSS, used by the inline variant to resolve `var()`. Tokens are read from unconditional `:root`/`html` rules only |
 | `html.inlineVariant` | `boolean` | `false` | Also generate `.inline.html` files with tokens resolved and styles inlined |
+| `html.pageCSS` | `string` | `html.baseCSS` | Stylesheet whose `html`/`body` rules stand in for the page: the inherited properties they set (font, color, line-height…) go on each inline example's root |
 | `css.outDir` | `string` | *required* | Output directory for per-component CSS and the `{prefix}-ui.css` bundle |
 | `css.baseCSS` | `string` | — | Design-tokens CSS, included as a `:root` block in the bundle |
 
@@ -424,7 +425,7 @@ runtime: { setup: './scripts/dom-shim.js' },
 
 **It's opt-in because reading the class means importing the module, and importing runs it** — a config file is the right place to say yes to that. Lit 3 carries its own DOM shim, so most projects need no `setup`; the option exists for components that touch a browser global at module scope. It degrades rather than fails: a module that throws on import costs that one component its runtime answer (reported as `runtime-unavailable`) and falls back to the source reader.
 
-`runtime` also answers for **styles**. The inline HTML variant resolves a `var()` against the tokens in `html.baseCSS` first. A name that isn't a token then falls back to the value the component's unconditional `:host` rule gives it, read from the class's assembled `elementStyles`. That covers a private property set by a shared style module the component imports (`static styles = [statusVars, css…]`), which is in no file prism reads. Conditional rules like `:host([variant="error"])` aren't read, so an example gets the value an element with no attributes set has.
+`runtime` also answers for **styles**. The inline HTML variant builds its rules from the class's assembled `elementStyles` instead of the `css` literals in the component's own file, so a rule or a `:host` property from a shared style module the component imports (`static styles = [statusVars, cardHoverStyles, css…]`) reaches the example. A `var()` resolves against the tokens in `html.baseCSS` first, then against the component's unconditional `:host` rule. Conditional rules like `:host([variant="error"])` aren't read, so an example gets the value an element with no attributes set has.
 
 `runtime` also answers for **methods**: `checkValidity()` contributed by a form-control mixin is a method of the element and of no file prism reads, and what a component's methods are is what decides whether its wrappers hand back a handle.
 

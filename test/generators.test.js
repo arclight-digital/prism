@@ -1500,7 +1500,7 @@ describe('inline variant: which rules reach a style attribute', () => {
       '<div class="alert"><span class="alert__body">x</span></div>',
     );
     expect(out).toContain('class="alert" style="position: relative; background: black"');
-    expect(out).toMatch(/<style>[\s\S]*\.arc-widget \.alert::before \{ content: '';[\s\S]*<\/style>/);
+    expect(out).toMatch(/<style>[\s\S]*\.arc-widget \.alert::before \{ content: '' !important;[\s\S]*<\/style>/);
     expect(out).not.toMatch(/style="[^"]*height: 2px/);
   });
 
@@ -1523,6 +1523,17 @@ describe('inline variant: which rules reach a style attribute', () => {
     expect(out).toContain('style="width: 2px"');
   });
 
+  it('lets a <style> state rule beat the inline value it overrides', () => {
+    // `.btn:hover` wins over `.btn` in the component's own stylesheet; an
+    // inline `border-color` beats any selector unless the rule is !important.
+    const out = inlineOf(
+      '.btn { border-color: gray; } .btn:hover { border-color: blue; box-shadow: 0 0 4px rgba(0, 0, 0, 0.5) !important; }',
+      '<button class="btn">x</button>',
+    );
+    expect(out).toContain('style="border-color: gray"');
+    expect(out).toContain('.arc-widget .btn:hover { border-color: blue !important; box-shadow: 0 0 4px rgba(0, 0, 0, 0.5) !important; }');
+  });
+
   it('leaves ::slotted rules out entirely', () => {
     // Their light-DOM form, `.arc-widget *`, would match the component's own
     // elements; in the example the slotted content is placeholder text.
@@ -1532,5 +1543,32 @@ describe('inline variant: which rules reach a style attribute', () => {
     );
     expect(out).toContain('style="display: grid"');
     expect(out).not.toContain('aspect-ratio');
+  });
+});
+
+describe('inline variant: the page around the example', () => {
+  const widget = {
+    ...meta, tag: 'arc-widget', className: 'ArcWidget', pascalName: 'Widget', props: [], hostDisplay: 'block',
+    css: ':host { display: block; color: red; } .title { font-weight: 600; }',
+    template: '<h3 class="title">x</h3>',
+  };
+  const inline = () => readFileSync(join(tmpDir, 'html', 'widget.inline.html'), 'utf-8');
+
+  it('puts the page\'s inherited defaults on the root, under the host\'s own', () => {
+    writeFileSync(join(tmpDir, 'tokens.css'), ':root { --font-body: Inter, sans-serif; --text: gray; }');
+    writeFileSync(join(tmpDir, 'page.css'), [
+      'html { -webkit-font-smoothing: antialiased; scroll-behavior: smooth; }',
+      'body { font-family: var(--font-body); color: var(--text); background-color: black; min-height: 100dvh; }',
+      '@media (min-width: 900px) { body { font-size: 20px; } }',
+    ].join('\n'));
+    generateHTML(widget, { outDir: 'html', prefix: 'arc', inlineVariant: true, baseCSS: 'tokens.css', pageCSS: 'page.css' }, tmpDir);
+    // Inherited only, tokens resolved, and the component's own color wins.
+    expect(inline()).toContain('<div class="arc-widget" style="-webkit-font-smoothing: antialiased; font-family: Inter, sans-serif; color: red; display: block">');
+  });
+
+  it('reads them from baseCSS when no pageCSS is given', () => {
+    writeFileSync(join(tmpDir, 'tokens.css'), ':root { --ink: navy; } body { color: var(--ink); }');
+    generateHTML({ ...widget, css: ':host { display: block; }' }, { outDir: 'html', prefix: 'arc', inlineVariant: true, baseCSS: 'tokens.css' }, tmpDir);
+    expect(inline()).toContain('style="color: navy; display: block"');
   });
 });
