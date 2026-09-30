@@ -1,5 +1,35 @@
 # Changelog
 
+## 3.2.2 — 2026-09-29
+
+### Fixed
+
+**A `var()` inside another `var()`'s fallback was left unresolved, or rewritten
+into a different value.** `resolveTokens` found each `var()` with a pattern
+whose fallback ended at the first `)`. A fallback is itself a value, and often
+holds a `var()` or a function, so the match split it in the middle:
+
+```css
+  margin-bottom: var(--_dl-term-margin, var(--space-xs));
+- margin-bottom: var(--space-xs);
++ margin-bottom: 4px;
+  border-color: var(--x, rgba(var(--border-default-rgb), 0));
+- border-color: rgba(var(--border-default-rgb, 0));
++ border-color: rgba(34, 34, 41, 0);
+```
+
+An inline example carries no stylesheet, so a leftover `var()` of a token is a
+declaration the browser drops. The second case is worse: it changed the value's
+meaning. The same split broke any token whose own value nests `var()` inside a
+function, e.g. `--focus-error` built from `rgba(var(--color-error-rgb), 0.2)`.
+`var()` calls are now found by balancing parentheses, and the fallback is
+resolved against the same token map. A `var()` is left as written only when its
+name has no unconditional `:root`/`html` value and it has no fallback.
+
+Still unresolved, and not token lookups: custom properties a component sets from
+an imported style module (prism reads only the `css` literals in the
+component's own file), and ones set at runtime with `style.setProperty`.
+
 ## 3.2.1 — 2026-09-29
 
 ### Fixed

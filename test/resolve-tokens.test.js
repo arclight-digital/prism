@@ -87,6 +87,49 @@ describe('resolveTokens', () => {
   });
 });
 
+describe('resolveTokens with a var() inside a fallback', () => {
+  const map = new Map([
+    ['--space-xs', '4px'],
+    ['--radius-md', '10px'],
+    ['--border-default', 'rgb(34, 34, 41)'],
+    ['--border-default-rgb', '34, 34, 41'],
+  ]);
+
+  it('resolves a var() that is the whole fallback', () => {
+    expect(resolveTokens('margin-bottom: var(--hook, var(--space-xs));', map)).toBe('margin-bottom: 4px;');
+  });
+
+  it('resolves a var() inside a fallback with other text', () => {
+    expect(resolveTokens('border: var(--input-border, 1px solid var(--border-default));', map)).toBe(
+      'border: 1px solid rgb(34, 34, 41);',
+    );
+  });
+
+  it('keeps a function in the fallback whole', () => {
+    // A pattern ending the fallback at the first `)` rewrote this into
+    // `rgba(var(--border-default-rgb, 0))`: a different value, silently.
+    expect(resolveTokens('color: var(--x, rgba(var(--border-default-rgb), 0));', map)).toBe(
+      'color: rgba(34, 34, 41, 0);',
+    );
+    expect(resolveTokens('width: var(--x, calc(var(--radius-md) * 2));', map)).toBe('width: calc(10px * 2);');
+  });
+
+  it('resolves a token used as a bare list inside rgba()', () => {
+    expect(resolveTokens('border-color: rgba(var(--border-default-rgb), 0);', map)).toBe(
+      'border-color: rgba(34, 34, 41, 0);',
+    );
+  });
+
+  it('leaves an unknown var() with no fallback as written, and resolves its neighbours', () => {
+    expect(resolveTokens('gap: var(--gap); margin: var(--space-xs);', map)).toBe('gap: var(--gap); margin: 4px;');
+  });
+
+  it('resolves through a token whose own value nests var() in functions', () => {
+    const chained = new Map([...map, ['--focus', '0 0 0 1px rgba(var(--border-default-rgb), 0.2)'], ['--ring', 'var(--focus)']]);
+    expect(resolveTokens('box-shadow: var(--ring);', chained)).toBe('box-shadow: 0 0 0 1px rgba(34, 34, 41, 0.2);');
+  });
+});
+
 describe('loadTokenMap', () => {
   // The shape of arc-ui's base.css: tokens on :root, then the same names
   // re-declared by a density preset, a media query, and a passthrough rule that

@@ -95,26 +95,61 @@ export function resolveTokens(css, tokenMap) {
   // reference stops but an ordinary token reused elsewhere in the string still
   // resolves. `chain` must be per-branch, never shared across sibling matches.
   //
-  // A fresh RegExp is created per call: `String.replace` with a global regex
-  // mutates `lastIndex`, so reusing one instance across the recursive calls
-  // inside the callback would corrupt the outer iteration.
+  // A var() is found by balancing parentheses, not by a pattern: a fallback is
+  // itself a value, and commonly holds another var() or a function —
+  // `var(--hook, var(--space-xs))`, `var(--x, rgba(var(--rgb), 0))`. A pattern
+  // that ends the fallback at the first `)` split those in the middle, leaving
+  // the inner var() unresolved or rewriting it into a different value.
+  function resolveVar(name, fallback, full, chain) {
+    if (chain.has(name)) {
+      // Circular reference — stop resolving this token
+      return fallback !== undefined ? resolveValue(fallback, chain) : full;
+    }
+    // A map built by hand can still hold a CSS-wide keyword; substituting it
+    // would put `inherit` where a length belongs, so treat it as unresolved.
+    if (tokenMap.has(name) && !isCSSWideKeyword(tokenMap.get(name))) {
+      return resolveValue(tokenMap.get(name), new Set(chain).add(name));
+    }
+    if (fallback !== undefined) {
+      return resolveValue(fallback, chain);
+    }
+    return full; // Leave unresolved
+  }
+
   function resolveValue(value, chain) {
-    const pattern = /var\((--[\w-]+)(?:\s*,\s*([^)]*))?\)/g;
-    return value.replace(pattern, (full, name, fallback) => {
-      if (chain.has(name)) {
-        // Circular reference — stop resolving this token
-        return fallback !== undefined ? resolveValue(fallback.trim(), chain) : full;
+    let out = '';
+    let i = 0;
+    for (;;) {
+      const at = value.indexOf('var(', i);
+      if (at === -1) return out + value.slice(i);
+      // `var(` inside a longer identifier (`--my-var(`) is not a var() call.
+      if (at > 0 && /[\w-]/.test(value[at - 1])) {
+        out += value.slice(i, at + 4);
+        i = at + 4;
+        continue;
       }
-      // A map built by hand can still hold a CSS-wide keyword; substituting it
-      // would put `inherit` where a length belongs, so treat it as unresolved.
-      if (tokenMap.has(name) && !isCSSWideKeyword(tokenMap.get(name))) {
-        return resolveValue(tokenMap.get(name), new Set(chain).add(name));
+      let depth = 1;
+      let comma = -1;
+      let j = at + 4;
+      for (; j < value.length && depth > 0; j++) {
+        const ch = value[j];
+        if (ch === '(') depth++;
+        else if (ch === ')') depth--;
+        else if (ch === ',' && depth === 1 && comma === -1) comma = j;
       }
-      if (fallback !== undefined) {
-        return resolveValue(fallback.trim(), chain);
+      if (depth > 0) return out + value.slice(i); // Unbalanced — leave the rest as is
+      const close = j - 1;
+      const full = value.slice(at, close + 1);
+      const name = value.slice(at + 4, comma === -1 ? close : comma).trim();
+      out += value.slice(i, at);
+      if (/^--[\w-]+$/.test(name)) {
+        const fallback = comma === -1 ? undefined : value.slice(comma + 1, close).trim();
+        out += resolveVar(name, fallback, full, chain);
+      } else {
+        out += full;
       }
-      return full; // Leave unresolved
-    });
+      i = close + 1;
+    }
   }
 
   return resolveValue(css, new Set());
