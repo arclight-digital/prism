@@ -1,5 +1,43 @@
 # Changelog
 
+## 3.2.1-beta.1 — 2026-09-29
+
+### Fixed
+
+**The inline HTML variant resolved tokens from every rule in `html.baseCSS`, and
+the last one won.** `loadTokenMap` read each `--name: value` in the file with no
+regard for the selector around it. A base stylesheet declares its tokens on
+`:root`, then declares the same names again under density presets, theme
+selectors, `@media` overrides, and the passthrough rule that lets a `:root`
+override reach into shadow DOM (`arc-button { --space-md: inherit }`). That rule
+came last, so it won.
+
+The reference catalog's base.css produced `inherit` for **73 tokens** in every
+`.inline.html` example: all spacing, radius, z-index, type, easing and duration
+tokens. In a plain value that is valid CSS but means the wrong thing
+(`gap: inherit`). Inside a math function it is invalid, and the browser drops
+the whole declaration without a word:
+
+```css
+- .shell__sidebar { height: calc(100vh - inherit); }
++ .shell__sidebar { height: calc(100vh - 64px); }
+- .topbar__actions--empty { margin-inline-start: calc(-1 * inherit); }
++ .topbar__actions--empty { margin-inline-start: calc(-1 * 16px); }
+```
+
+Now only an unconditional `:root` or `html` rule counts as a token: one that
+nothing encloses except, at most, `@layer`. `html.baseCSS` was already
+documented as a design-tokens file, so this is what that row meant. CSS-wide
+keywords (`inherit`, `initial`, `unset`, `revert`, `revert-layer`) are never
+recorded as a value. `resolveTokens` also refuses to substitute one from a map
+built by hand: it keeps the `var()` as written, or uses its fallback.
+
+**Expect every inline example's colors to change.** The same last-one-wins rule
+took **66 color, shadow and glow tokens** from the `[data-theme="light"]` block,
+only because it follows `:root` in the file. The examples now render with the
+stylesheet's default theme, which is what a page with no `data-theme` shows. In
+the reference catalog that default is dark.
+
 ## 3.2.0 — 2026-09-26
 
 ### Added
